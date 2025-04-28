@@ -29,7 +29,7 @@ function createDownloadingWindow() {
 function setupAutoUpdater() {
     autoUpdater.on('update-available', () => {
         console.log('Update available. Downloading...');
-        // Create downloading window
+        // Show the "Downloading..." page
         createDownloadingWindow();
     });
 
@@ -46,6 +46,8 @@ function setupAutoUpdater() {
     // Check for updates after the app is ready
     autoUpdater.checkForUpdatesAndNotify();
 }
+
+
 let isHeadless = process.argv.includes('--headless'); // Headless mode flag
 let isApiConnected = false; // Track whether an API client is connected
 
@@ -1275,28 +1277,32 @@ ipcMain.on('open-renderer', () => {
 });
 
 
-
 app.whenReady().then(() => {
+    // Setup auto updater before other tasks
     setupAutoUpdater();
 
-    loadAudioDevices();
-    
-    // Create the window
-    createWindow();
-    
-    // Start the TCP server
-    tcpServer.startTCPServer();
-    
-    // Ensure that the app behaves as expected when activated (e.g., no duplicate windows)
-    app.on('activate', () => {
-        // If there are no open windows, create one
-        if (BrowserWindow.getAllWindows().length === 0) {
-            createWindow();
-        }
+    // Wait for the update process to complete before proceeding
+    autoUpdater.once('update-downloaded', () => {
+        // Now that the update is downloaded and we have installed it, 
+        // proceed with loading the audio devices, creating windows, etc.
+        
+        loadAudioDevices();  // Assuming you have a loadAudioDevices function
+
+        // Create the main window after update process is complete
+        createWindow();
+
+        // Start the TCP server or other services
+        tcpServer.startTCPServer();
+
+        // Ensure the app behaves correctly when activated
+        app.on('activate', () => {
+            // If there are no open windows, create one
+            if (BrowserWindow.getAllWindows().length === 0) {
+                createWindow();
+            }
+        });
     });
-
 });
-
 
 
 
