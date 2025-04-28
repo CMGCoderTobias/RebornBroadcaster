@@ -1278,29 +1278,30 @@ ipcMain.on('open-renderer', () => {
 
 
 app.whenReady().then(() => {
-    // Setup auto updater before other tasks
+    console.log('App is ready. Setting up auto-updater and launching app...');
+
     setupAutoUpdater();
 
-    // Wait for the update process to complete before proceeding
-    autoUpdater.once('update-downloaded', () => {
-        // Now that the update is downloaded and we have installed it, 
-        // proceed with loading the audio devices, creating windows, etc.
-        
-        loadAudioDevices();  // Assuming you have a loadAudioDevices function
+    // Log if setupAutoUpdater is not working
+    console.log('Auto updater setup complete.');
 
-        // Create the main window after update process is complete
-        createWindow();
+    loadAudioDevices();
 
-        // Start the TCP server or other services
-        tcpServer.startTCPServer();
+    console.log('Audio devices loaded.');
 
-        // Ensure the app behaves correctly when activated
-        app.on('activate', () => {
-            // If there are no open windows, create one
-            if (BrowserWindow.getAllWindows().length === 0) {
-                createWindow();
-            }
-        });
+    createWindow();
+
+    console.log('Main window created.');
+
+    tcpServer.startTCPServer();
+
+    console.log('TCP Server started.');
+
+    app.on('activate', () => {
+        // If there are no open windows, create one
+        if (BrowserWindow.getAllWindows().length === 0) {
+            createWindow();
+        }
     });
 });
 
