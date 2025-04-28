@@ -8,44 +8,70 @@ const iconv = require('iconv-lite');
 const { listenerCount } = require('process');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { autoUpdater } = require('electron-updater');
+const isDev = !app.isPackaged; // Correctly detects if running in dev mode
 
 
-// Function to create the downloading window
+
 function createDownloadingWindow() {
-    mainWindow = new BrowserWindow({
-        width: 400,
-        height: 200,
-        frame: false,
-        webPreferences: {
-            preload: path.join(__dirname, 'src', 'preload.js'),
-            contextIsolation: true,
-            nodeIntegration: false,
-        },
+    downloadingWindow = new BrowserWindow({
+      width: 400,
+      height: 200,
+      frame: false,
+      webPreferences: {
+        preload: path.join(__dirname, 'src', 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
     });
-    mainWindow.loadFile(path.join(__dirname, 'downloading.html'));  // Show the "Downloading..." page
-}
-
-// Setup auto updater with download and install handling
-function setupAutoUpdater() {
+    downloadingWindow.loadFile(path.join(__dirname, 'downloading.html'));  // Show "Downloading..." page
+  }
+  
+  // Function to handle app initialization
+  function initializeApp() {
+    console.log("App Initialization started...");
+    loadAudioDevices(); // Example: Initialize any audio-related features
+    
+    createWindow(); // Open the main window of the app
+    
+    // Start the TCP server or any other background services
+    tcpServer.startTCPServer();
+    
+    // Ensure that the app behaves as expected when activated (e.g., no duplicate windows)
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();  // If no windows exist, create a new one
+      }
+    });
+  }
+  
+  // Function to set up auto-updater with downloading and install handling
+  function setupAutoUpdater() {
+    console.log('Setting up auto-updater...');
+    
     autoUpdater.on('update-available', () => {
-        console.log('Update available. Downloading...');
-        // Show the "Downloading..." page
-        createDownloadingWindow();
+      console.log('Update available. Downloading...');
+      createDownloadingWindow();  // Show downloading window when update starts
     });
-
+    
     autoUpdater.on('update-downloaded', () => {
-        console.log('Update downloaded. Installing...');
-        // Automatically install the update and quit the app
-        autoUpdater.quitAndInstall();
+      console.log('Update downloaded. Installing...');
+      autoUpdater.quitAndInstall();  // Install the update and restart the app
     });
-
+    
     autoUpdater.on('error', (error) => {
-        console.error('Update error:', error);
+      console.error('Error in update process:', error);
     });
-
+    
+    autoUpdater.on('update-not-available', () => {
+      console.log('No update available.');
+      initializeApp();  // Proceed with normal app initialization if no update is found
+    });
+  
     // Check for updates after the app is ready
     autoUpdater.checkForUpdatesAndNotify();
-}
+  }
+  
+  
 
 
 let isHeadless = process.argv.includes('--headless'); // Headless mode flag
@@ -77,7 +103,6 @@ global.recordingActive = false;  // Tracks whether recording is active
 
 
 // Helper function to get the correct preload path based on whether the app is packaged or in dev mode
-const isDev = !app.isPackaged; // Correctly detects if running in dev mode
 const basePath = isDev ? __dirname : path.join(process.resourcesPath );
 
 
@@ -1278,32 +1303,18 @@ ipcMain.on('open-renderer', () => {
 
 
 app.whenReady().then(() => {
-    console.log('App is ready. Setting up auto-updater and launching app...');
+    console.log("App is ready.");
+    
+    if (!isDev) {
+      console.log("Checking for updates...");
+      setupAutoUpdater();  // Set up auto-updater if not in dev mode
+    } else {
+      console.log("Development mode, skipping update check...");
+      initializeApp();  // Skip update check in dev mode and proceed with normal initialization
+    }
+  });
+  
 
-    setupAutoUpdater();
-
-    // Log if setupAutoUpdater is not working
-    console.log('Auto updater setup complete.');
-
-    loadAudioDevices();
-
-    console.log('Audio devices loaded.');
-
-    createWindow();
-
-    console.log('Main window created.');
-
-    tcpServer.startTCPServer();
-
-    console.log('TCP Server started.');
-
-    app.on('activate', () => {
-        // If there are no open windows, create one
-        if (BrowserWindow.getAllWindows().length === 0) {
-            createWindow();
-        }
-    });
-});
 
 
 
