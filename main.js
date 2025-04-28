@@ -10,24 +10,42 @@ const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fet
 const { autoUpdater } = require('electron-updater');
 
 
-autoUpdater.on('update-available', () => {
-    console.log('Update available. Downloading...');
-  });
-  
-  autoUpdater.on('update-downloaded', () => {
-    console.log('Update downloaded. Installing...');
-  
-    // Automatically install the update and quit the app
-    autoUpdater.quitAndInstall();
-  });
-  
-  // Handle update errors
-  autoUpdater.on('error', (error) => {
-    console.error('Update error:', error);
-  });
+// Function to create the downloading window
+function createDownloadingWindow() {
+    mainWindow = new BrowserWindow({
+        width: 400,
+        height: 200,
+        frame: false,
+        webPreferences: {
+            preload: path.join(__dirname, 'src', 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+        },
+    });
+    mainWindow.loadFile(path.join(__dirname, 'downloading.html'));  // Show the "Downloading..." page
+}
 
-  
+// Setup auto updater with download and install handling
+function setupAutoUpdater() {
+    autoUpdater.on('update-available', () => {
+        console.log('Update available. Downloading...');
+        // Create downloading window
+        createDownloadingWindow();
+    });
 
+    autoUpdater.on('update-downloaded', () => {
+        console.log('Update downloaded. Installing...');
+        // Automatically install the update and quit the app
+        autoUpdater.quitAndInstall();
+    });
+
+    autoUpdater.on('error', (error) => {
+        console.error('Update error:', error);
+    });
+
+    // Check for updates after the app is ready
+    autoUpdater.checkForUpdatesAndNotify();
+}
 let isHeadless = process.argv.includes('--headless'); // Headless mode flag
 let isApiConnected = false; // Track whether an API client is connected
 
@@ -1259,7 +1277,7 @@ ipcMain.on('open-renderer', () => {
 
 
 app.whenReady().then(() => {
-    autoUpdater.checkForUpdatesAndNotify();
+    setupAutoUpdater();
 
     loadAudioDevices();
     
