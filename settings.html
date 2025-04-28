@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Page Wrapper with Gradient Border -->
+    <div class="page-wrapper">
+        <!-- Content Wrapper with White Background inside the gradient border -->
+        <div class="content-wrapper">
+            <div class="settings-container">
+                <h2>Stream Settings</h2>
+
+                <form id="settingsForm">
+                    <div class="form-group">
+                        <label for="mountpoint">Mountpoint (Username)</label>
+                        <input type="text" id="mountpoint" name="mountpoint" value="" required />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="sourcePassword">Source Password</label>
+                        <input type="password" id="sourcePassword" name="sourcePassword" value="" required />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="encoding">Encoding Type</label>
+                        <select id="encoding" name="encoding">
+                            <option value="mp3">MP3</option>
+                            <option value="aac">AAC</option>
+                            <option value="flac">FLAC</option>
+                            <option value="opus">Opus</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="audioSource">Audio Source</label>
+                        <select id="audioSource" name="audioSource">
+                            <!-- Options will be dynamically filled -->
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="bitrate">Bitrate (kbps)</label>
+                        <input type="number" id="bitrate" name="bitrate" min="32" max="320" step="32" value="128" required />
+                    </div>
+
+                    <!-- Add this below your other form elements in settings.html -->
+                    <div class="form-group">
+                        <label for="recordingPath">Recording Path</label>
+                        <div class="input-group">
+                            <input type="text" id="recordingPath" name="recordingPath" value="" readonly />
+                            <button type="button" id="browseButton">Browse...</button>
+                        </div>
+                    </div>
+
+                    <button type="submit">Save Settings</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="settingsRenderer.js"></script>
+</body>
+</html>

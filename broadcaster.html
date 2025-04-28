@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stream Controller</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <div class="page-wrapper">
+    <div class="content-wrapper">
+        <button id="closeAppBtn">Close App</button>
+
+      <!-- Text lines at the top -->
+      <div class="info-panel">
+        <p id="statusDisplay">Status: Idle</p>
+        <p id="timerDisplay">Standby</p>
+        <p id="listenerCountDisplay">Offline</p>
+      </div>
+
+      <!-- Buttons section -->
+      <div class="controls">
+        <button id="startStreamButton">Start Stream</button>
+        <button id="startRecordingButton">Start Recording</button>
+        <button id="settingsButton">Settings</button>
+      </div>
+
+      <!-- Log output box -->
+      <div id="logBox" aria-label="Log output for status messages" role="log"></div>
+    </div>
+  </div>
+
+  <script src="broadcastRenderer.js"></script>
+</body>
+</html>

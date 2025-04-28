@@ -1,0 +1,170 @@
+/* Reset & global box-sizing */
+html, body {
+    margin: 0;
+    padding: 0;                      /* No default padding */
+    box-sizing: border-box;
+    overflow-x: hidden;               /* Prevent horizontal scroll */
+    height: 100%;                      /* Full height for the body */
+    background-color: white;          /* Set the body background to white */
+}
+
+/*, *::before, *::after */
+*,
+*::before,
+*::after {
+    box-sizing: inherit;
+}
+
+/* Page Wrapper with Gradient Border */
+.page-wrapper {
+    min-height: 100vh;
+    background: repeating-linear-gradient(135deg, red, black 30%, #ff6b6b 60%, red 90%); /* Repeating gradient border */
+    padding: 40px;
+    display: flex;
+    justify-content: center; /* Center the content */
+    align-items: center;
+}
+
+/* Content Wrapper (white box inside the gradient border) */
+.content-wrapper {
+    background-color: white;         /* White background inside */
+    padding: 20px;
+    border-radius: 12px;
+    width: 100%;
+    max-width: 800px;
+    box-sizing: border-box;
+    box-shadow: 0px 0px 15px rgba(0, 0, 0, 0.1); /* Soft shadow for the white box */
+}
+
+/* Info Panel Styling (3 text lines at the top) */
+.info-panel {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.info-panel p {
+    font-size: 18px;
+    color: #333;
+    margin: 10px 0;
+}
+
+/* Buttons Styling */
+.controls {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.controls button {
+    padding: 10px 20px;
+    font-size: 16px;
+    margin: 5px;
+    background-color: #1e88e5;
+    border: none;
+    border-radius: 4px;
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+.controls button:hover {
+    background-color: #1565c0;
+}
+
+/* Log Output Box Styling */
+#logBox {
+    margin-top: 20px;
+    padding: 10px;
+    height: 200px;
+    width: 100%;
+    background-color: #111;   /* Black background */
+    color: #0f0;
+    font-family: monospace;
+    font-size: 14px;
+    border: 1px solid #333;
+
+    overflow-y: auto;
+    overflow-x: hidden;
+
+    white-space: pre-wrap;
+    word-wrap: break-word;
+
+    user-select: text;
+    pointer-events: none;
+    box-sizing: border-box;
+}
+
+/* General Settings Page Styling */
+.settings-container {
+    font-family: Arial, sans-serif;
+    background-color: #333;
+    color: white;
+    width: 100%;
+    max-width: 400px;
+    padding: 20px;
+    margin: 0 auto;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+h2 {
+    text-align: center;
+    margin-bottom: 20px;
+    font-size: 24px;
+}
+
+.form-group {
+    margin-bottom: 15px;
+}
+
+label {
+    display: block;
+    font-size: 14px;
+    margin-bottom: 5px;
+    color: #ddd;
+}
+
+input, select {
+    width: 100%;
+    padding: 10px;
+    font-size: 14px;
+    background-color: #444;
+    border: 1px solid #555;
+    color: white;
+    border-radius: 4px;
+}
+
+input:focus, select:focus {
+    border-color: #1e88e5;
+    outline: none;
+}
+
+button {
+    width: 100%;
+    padding: 10px;
+    font-size: 16px;
+    background-color: #1e88e5;
+    border: none;
+    border-radius: 4px;
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+button:hover {
+    background-color: #1565c0;
+}
+
+/* Specific style for the dropdown menu (audio source) */
+#audioSource {
+    background-color: #444;
+}
+
+/* Optional: Adjusting the button style for a more consistent look */
+button[type="submit"] {
+    margin-top: 20px;
+    background-color: #28a745;
+}
+
+button[type="submit"]:hover {
+    background-color: #218838;
+}
