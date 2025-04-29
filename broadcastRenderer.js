@@ -173,9 +173,16 @@ window.electron.onStreamStatusUpdate((status) => {
     if (el) el.textContent = status; // Show "Offline" or listener count
 });
 
-document.getElementById('closeAppBtn').addEventListener('click', () => {
-    window.electron.requestAppClose('Warning');
+
+
+document.getElementById('minimizeBtn').addEventListener('click', () => {
+    window.api.minimize();
 });
+
+document.getElementById('closeBtn').addEventListener('click', () => {
+    window.api.close();
+});
+
 
 // Listen for the confirmation request from the main process
 window.electron.onConfirmClose(({ from }) => {

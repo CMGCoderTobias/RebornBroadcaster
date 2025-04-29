@@ -132,3 +132,9 @@ respondToWarning: (confirmed) => {
     ipcRenderer.send('confirm-close-response', confirmed);
 }
 });
+
+
+contextBridge.exposeInMainWorld('api', {
+  minimize: () => ipcRenderer.send('window-minimize'),
+  close: () => ipcRenderer.send('window-close')
+});

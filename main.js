@@ -311,7 +311,7 @@ ipcMain.on('send-to-api', (event, data) => {
 function startListenerCountPolling(settings) {
     if (listenerInterval) return; // Already polling
 
-    const icecastUrl = 'http://localhost:8000/status-json.xsl';
+    const icecastUrl = `http://${settings.icecastHost}:${settings.icecastPort}/status-json.xsl`;
 
     listenerInterval = setInterval(async () => {
         try {
@@ -470,7 +470,7 @@ function openSettings() {
         width: 600,
         height: 720,
         maxWidth: 600,      // Maximum width the window can be resized to
-
+        frame:false,
         webPreferences: {
             preload: preloadPath,  // Use the correct path to preload.js
         },
@@ -517,7 +517,7 @@ async function loadAudioDevices() {
 
 
 async function startStream({ settings, event = null, respond = null }) {
-    const requiredFields = ['mountpoint', 'sourcepassword', 'bitrate', 'encodingType', 'audioSourceName'];
+    const requiredFields = ['mountpoint', 'sourcepassword', 'bitrate', 'encodingType', 'audioSourceName', 'icecastHost', 'icecastPort'];
     const missingFields = requiredFields.filter(field => !settings[field]);
 
     if (missingFields.length) {
@@ -560,7 +560,7 @@ async function startStream({ settings, event = null, respond = null }) {
         '-acodec', codec,
         ...audioOptions,
         '-f', format,
-        `icecast://source:${settings.sourcepassword}@localhost:8000/${settings.mountpoint}`
+        `icecast://source:${settings.sourcepassword}@${settings.icecastHost}:${settings.icecastPort}/${settings.mountpoint}`
     ];
 
     console.log("🚀 Starting FFmpeg with:\n", ffmpegArgs.join(' '));
@@ -828,7 +828,19 @@ function gracefulShutdown() {
 
 
 
+function getWindowFromWebContents(sender) {
+    return BrowserWindow.fromWebContents(sender);
+}
 
+ipcMain.on('window-minimize', (event) => {
+    const win = getWindowFromWebContents(event.sender);
+    if (win) win.minimize();
+});
+
+ipcMain.on('window-close', (event) => {
+    const win = getWindowFromWebContents(event.sender);
+    if (win) win.close();
+});
 
 
 // Handler for starting the stream
@@ -876,36 +888,59 @@ ipcMain.on('load-for-use', (event) => {
         if (!settings.mountpoint) {
             console.error("❌ Missing required setting: mountpoint");
             event.reply('load-settings-response', { error: 'Missing required setting: mountpoint' });
+            sendLog('Missing Mountpoint');
+
             return;
         }
 
         if (!settings.sourcepassword) {
             console.error("❌ Missing required setting: sourcepassword");
             event.reply('load-settings-response', { error: 'Missing required setting: sourcepassword' });
+            sendLog('Missing Password');
             return;
         }
+
+        if (!settings.icecastHost) {
+            console.error("❌ Missing required setting: Ip Address");
+            event.reply('load-settings-response', { error: 'Missing required setting: Ip Address' });
+            sendLog('Missing Ip Address');
+
+            return;
+        }
+
+        if (!settings.icecastPort) {
+            console.error("❌ Missing required setting: Port");
+            event.reply('load-settings-response', { error: 'Missing required setting: port' });
+            sendLog('Missing Port');
+            return;
+        }
+
 
         if (!settings.audioSourceName) {
             console.error("❌ Missing required setting: audioSourceName");
             event.reply('load-settings-response', { error: 'Missing required setting: audioSourceName' });
+            sendLog('Missing Audio Source');
             return;
         }
 
         if (!settings.encodingType) {
             console.error("❌ Missing required setting: encodingType");
             event.reply('load-settings-response', { error: 'Missing required setting: encodingType' });
+            sendLog('Missing encoding Type')
             return;
         }
 
         if (!settings.bitrate) {
             console.error("❌ Missing required setting: bitrate");
             event.reply('load-settings-response', { error: 'Missing required setting: bitrate' });
+            sendLog('Missing Bitrate')
             return;
         }
 
         if (!settings.recordingPath) {
             console.error("❌ Missing required setting: recordingPath");
             event.reply('load-settings-response', { error: 'Missing required setting: recordingPath' });
+            sendLog('Missing Recording Path')
             return;
         }
 
@@ -1146,6 +1181,8 @@ ipcMain.on('save-settings', (event, settings, fromApi = false) => {
     const settingsToSave = {
         mountpoint: settings.mountpoint || '',
         sourcepassword: settings.sourcepassword || '',
+        icecastHost: settings.icecastHost || '',
+        icecastPort: settings.icecastPort || '',
         encodingType: settings.encodingType || '',
         audioSourceId: settings.audioSourceId || '', // Store ID
         audioSourceName: settings.audioSourceName || '', // Store Name

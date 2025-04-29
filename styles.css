@@ -168,3 +168,41 @@ button[type="submit"] {
 button[type="submit"]:hover {
     background-color: #218838;
 }
+
+.drag-area {
+    position: absolute;
+    top: 0;
+    height: 30px;
+    width: 100%;
+    -webkit-app-region: drag;
+    z-index: 1000;
+    opacity: 0;
+  }
+  
+  .window-controls {
+    position: absolute;
+    top: 0;
+    right: 0;
+    z-index: 10;
+    display: flex;
+    gap: 4px;
+    -webkit-app-region: drag;
+
+  }
+  
+  .window-controls button {
+    background: transparent;
+    border: none;
+    font-size: 16px;
+    padding: 4px 22px;
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+  }
+  body::-webkit-scrollbar {
+    width: 17px;
+  }
+  
+  body::-webkit-scrollbar-thumb {
+    background-color: transparent;
+  }
+  

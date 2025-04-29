@@ -9,6 +9,11 @@
 <body>
     <!-- Page Wrapper with Gradient Border -->
     <div class="page-wrapper">
+        <div class="window-controls">
+            <button id="minimizeBtn">—</button>
+            <button id="closeBtn">×</button>
+          </div>
+          
         <!-- Content Wrapper with White Background inside the gradient border -->
         <div class="content-wrapper">
             <div class="settings-container">
@@ -23,6 +28,16 @@
                     <div class="form-group">
                         <label for="sourcePassword">Source Password</label>
                         <input type="password" id="sourcePassword" name="sourcePassword" value="" required />
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="hostIP">Ip Address</label>
+                        <input type="IP" id="hostIP" name="hostIP" value="" required />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="hostPort">Port</label>
+                        <input type="port" id="hostPort" name="hostPort" value="" required />
                     </div>
 
                     <div class="form-group">

@@ -10,6 +10,8 @@ window.addEventListener('DOMContentLoaded', () => {
         const bitrateInput = document.getElementById('bitrate');
         const pathInput = document.getElementById('recordingPath');
         const browseButton = document.getElementById('browseButton');
+        const icecastHostInput = document.getElementById('hostIP');
+        const icecastPortInput = document.getElementById('hostPort');
 
         let cachedDevices = []; // Store devices to compare later
 
@@ -20,6 +22,15 @@ window.addEventListener('DOMContentLoaded', () => {
         } else {
             console.error("❌ getCachedAudioSources is NOT defined in this scope!");
         }
+
+        document.getElementById('minimizeBtn').addEventListener('click', () => {
+            window.api.minimize();
+        });
+        
+        document.getElementById('closeBtn').addEventListener('click', () => {
+            window.api.close();
+        });
+        
 
         // Function to populate the audio sources dropdown
         function populateAudioSources(devices) {
@@ -52,6 +63,8 @@ window.addEventListener('DOMContentLoaded', () => {
                 // Load individual settings safely
                 if (mountpointInput) mountpointInput.value = settings.mountpoint || '';
                 if (sourcePasswordInput) sourcePasswordInput.value = settings.sourcepassword || '';
+                if (icecastHostInput) icecastHostInput.value = settings.icecastHost || '';
+                if (icecastPortInput) icecastPortInput.value = settings.icecastPort || '';
                 if (encodingTypeSelect) encodingTypeSelect.value = settings.encodingType || 'mp3';
                 if (bitrateInput) bitrateInput.value = settings.bitrate || 128;
                 if (pathInput) pathInput.value = settings.recordingPath || '';
@@ -99,6 +112,8 @@ window.addEventListener('DOMContentLoaded', () => {
             const settings = {
                 mountpoint: mountpointInput.value.trim(),
                 sourcepassword: sourcePasswordInput.value.trim(),
+                icecastHost: icecastHostInput.value.trim(),
+                icecastPort: icecastPortInput.value.trim(),
                 encodingType: encodingTypeSelect.value,
                 audioSourceId: selectedDeviceId || '',
                 audioSourceName: selectedDeviceName || '',
