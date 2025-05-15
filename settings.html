@@ -9,20 +9,38 @@
 <body>
     <!-- Page Wrapper with Gradient Border -->
     <div class="page-wrapper">
+              <div class="drag-area">
         <div class="window-controls">
             <button id="minimizeBtn">—</button>
             <button id="closeBtn">×</button>
-          </div>
+          </div></div>
           
         <!-- Content Wrapper with White Background inside the gradient border -->
         <div class="content-wrapper">
+    <div class="btn-container">
+
+        <button class="btn-upload" id="confupload">
+         <span class="arrow up"></span> Upload
+        </button>
+
+        <button class ="btn-download" id="confdownload">
+        <span class="arrow down"></span> Download
+        </button>
+    </div>
+
+
             <div class="settings-container">
                 <h2>Stream Settings</h2>
 
                 <form id="settingsForm">
                     <div class="form-group">
-                        <label for="mountpoint">Mountpoint (Username)</label>
+                        <label for="mountpoint">Mountpoint</label>
                         <input type="text" id="mountpoint" name="mountpoint" value="" required />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" name="username" value="" required />
                     </div>
 
                     <div class="form-group">

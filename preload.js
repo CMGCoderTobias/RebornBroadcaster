@@ -98,6 +98,9 @@ contextBridge.exposeInMainWorld('electron', {
     }),
 
     OpenFolder: () => ipcRenderer.invoke('open-folder-dialog'),
+    downloadconf: () => ipcRenderer.invoke('open-save-folder-dialog'),
+    uploadconf: () => ipcRenderer.invoke('open-config-file-dialog'),
+
 
 
   startStreamTimer: () => ipcRenderer.send('start-stream-timer'),

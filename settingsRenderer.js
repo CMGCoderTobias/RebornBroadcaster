@@ -2,14 +2,19 @@ window.addEventListener('DOMContentLoaded', () => {
     try {
         console.log("🔥 DOMContentLoaded fired!");
 
+
+
         const form = document.getElementById('settingsForm');
         const audioSourceSelect = document.getElementById('audioSource');
         const mountpointInput = document.getElementById('mountpoint');
+        const usernameInput = document.getElementById('username');
         const sourcePasswordInput = document.getElementById('sourcePassword');
         const encodingTypeSelect = document.getElementById('encoding');
         const bitrateInput = document.getElementById('bitrate');
         const pathInput = document.getElementById('recordingPath');
         const browseButton = document.getElementById('browseButton');
+        const confdownload = document.getElementById('confdownload');
+        const confupload = document.getElementById('confupload');
         const icecastHostInput = document.getElementById('hostIP');
         const icecastPortInput = document.getElementById('hostPort');
 
@@ -54,6 +59,8 @@ window.addEventListener('DOMContentLoaded', () => {
             console.log("🎤 Audio devices populated:", devices);
         }
 
+        
+
         // Load settings and pre-select the saved audio source
         const loadSettings = async () => {
             try {
@@ -62,6 +69,7 @@ window.addEventListener('DOMContentLoaded', () => {
         
                 // Load individual settings safely
                 if (mountpointInput) mountpointInput.value = settings.mountpoint || '';
+                if (usernameInput) usernameInput.value = settings.username || '';
                 if (sourcePasswordInput) sourcePasswordInput.value = settings.sourcepassword || '';
                 if (icecastHostInput) icecastHostInput.value = settings.icecastHost || '';
                 if (icecastPortInput) icecastPortInput.value = settings.icecastPort || '';
@@ -111,6 +119,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
             const settings = {
                 mountpoint: mountpointInput.value.trim(),
+                username: usernameInput.value.trim(),
                 sourcepassword: sourcePasswordInput.value.trim(),
                 icecastHost: icecastHostInput.value.trim(),
                 icecastPort: icecastPortInput.value.trim(),
@@ -138,8 +147,37 @@ window.addEventListener('DOMContentLoaded', () => {
                 console.error("❌ Error choosing folder:", error);
             }
         });
+       confupload.addEventListener('click', async () => {
+        try {
+            const selectedFile = await window.electron.uploadconf();
+            if (selectedFile) {
+            console.log('✅ Uploaded config file, now reloading settings...');
+            await loadSettings(); // 👈 this reloads the form with the saved settings
+            }
+        } catch (error) {
+            console.error("❌ Error selecting config file to upload:", error);
+        }
+        });
+
+
+        confdownload.addEventListener('click', async () => {
+          try {
+            const saveFolder = await window.electron.downloadconf();
+            if (saveFolder) {
+              pathInput.value = saveFolder;  // or wherever you want to save the folder path
+              console.log('Selected folder to save config:', saveFolder);
+            }
+          } catch (error) {
+            console.error("❌ Error selecting folder to save config:", error);
+          }
+        });
 
     } catch (error) {
         console.error('❌ Error in DOMContentLoaded listener:', error);
     }
+
+    
+
+
+
 });

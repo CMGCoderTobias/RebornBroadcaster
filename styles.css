@@ -172,31 +172,35 @@ button[type="submit"]:hover {
 .drag-area {
     position: absolute;
     top: 0;
+    left: 0;
     height: 30px;
     width: 100%;
     -webkit-app-region: drag;
     z-index: 1000;
-    opacity: 0;
   }
   
   .window-controls {
     position: absolute;
     top: 0;
-    right: 0;
-    z-index: 10;
+    right: 10px;
+    z-index: -10;
     display: flex;
     gap: 4px;
     -webkit-app-region: drag;
+ 
 
   }
   
   .window-controls button {
     background: transparent;
+    color: balck;
     border: none;
     font-size: 16px;
     padding: 4px 22px;
     cursor: pointer;
     -webkit-app-region: no-drag;
+    width: 10px;
+
   }
   body::-webkit-scrollbar {
     width: 17px;
@@ -206,3 +210,65 @@ button[type="submit"]:hover {
     background-color: transparent;
   }
   
+
+.btn-upload,
+.btn-download {
+  font-size: 16px;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  user-select: none;
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Upload button styles */
+.btn-upload {
+  background-color: #e6f4ea;
+  border-color: #3ba55c;
+  color: #2f7a3e;
+}
+
+.btn-upload .arrow {
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 10px solid #3ba55c;
+  width: 0;
+  height: 0;
+}
+
+.btn-upload:hover {
+  background-color: #c7ebd1;
+  border-color: #2e8b44;
+}
+
+/* Download button styles */
+.btn-download {
+  background-color: #fbeaea;
+  border-color: #d9534f;
+  color: #a73734;
+}
+
+.btn-download .arrow {
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 10px solid #d9534f;
+  width: 0;
+  height: 0;
+}
+
+.btn-download:hover {
+  background-color: #f5c6c5;
+  border-color: #b42b29;
+}
+
+.btn-container {
+  display: flex;
+  gap: 12px;       /* space between buttons */
+  align-items: center;
+  /* optional: justify-content if you want to center horizontally */
+  /* justify-content: center; */
+}

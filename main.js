@@ -517,7 +517,7 @@ async function loadAudioDevices() {
 
 
 async function startStream({ settings, event = null, respond = null }) {
-    const requiredFields = ['mountpoint', 'sourcepassword', 'bitrate', 'encodingType', 'audioSourceName', 'icecastHost', 'icecastPort'];
+    const requiredFields = ['mountpoint', 'username', 'sourcepassword', 'bitrate', 'encodingType', 'audioSourceName', 'icecastHost', 'icecastPort'];
     const missingFields = requiredFields.filter(field => !settings[field]);
 
     if (missingFields.length) {
@@ -560,7 +560,7 @@ async function startStream({ settings, event = null, respond = null }) {
         '-acodec', codec,
         ...audioOptions,
         '-f', format,
-        `icecast://source:${settings.sourcepassword}@${settings.icecastHost}:${settings.icecastPort}/${settings.mountpoint}`
+        `icecast://${settings.username}:${settings.sourcepassword}@${settings.icecastHost}:${settings.icecastPort}/${settings.mountpoint}`
     ];
 
     console.log("🚀 Starting FFmpeg with:\n", ffmpegArgs.join(' '));
@@ -892,6 +892,12 @@ ipcMain.on('load-for-use', (event) => {
 
             return;
         }
+        if (!settings.username) {
+            console.error("❌ Missing required setting: Username");
+            event.reply('load-settings-response', { error: 'Missing required setting: Username' });
+            sendLog('Missing Username');
+            return;
+        }
 
         if (!settings.sourcepassword) {
             console.error("❌ Missing required setting: sourcepassword");
@@ -1102,6 +1108,82 @@ ipcMain.handle('open-folder-dialog', async () => {
     return result.filePaths[0]; // Return the selected folder path
 });
 
+ipcMain.handle('open-config-file-dialog', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [
+      { name: 'Config Files', extensions: ['json', 'conf', 'cfg', 'xml'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePaths[0]) return null;
+
+  const selectedFile = result.filePaths[0];
+
+  try {
+    const fileContent = fs.readFileSync(selectedFile, 'utf-8');
+    const newSettings = JSON.parse(fileContent);
+
+    // Load existing settings (if file exists)
+    let currentSettings = {};
+    if (fs.existsSync(settingsFilePath)) {
+      const existingContent = fs.readFileSync(settingsFilePath, 'utf-8');
+      currentSettings = JSON.parse(existingContent);
+    }
+
+    // Merge the new settings over the old ones
+    const mergedSettings = {
+      ...currentSettings,
+      ...newSettings
+    };
+
+    // Save back the merged settings
+    fs.writeFileSync(settingsFilePath, JSON.stringify(mergedSettings, null, 2), 'utf-8');
+    console.log('✅ Config imported and merged:', mergedSettings);
+
+    // Notify renderer and possibly API
+    if (!isHeadless) {
+      mainWindow.webContents.send('load-settings', mergedSettings);
+    }
+
+    if (isApiConnected) {
+      ipcMain.emit('send-settings-to-api', mergedSettings);
+    }
+
+    return selectedFile;
+
+  } catch (error) {
+    console.error('❌ Failed to load and apply config file:', error);
+    throw error;
+  }
+});
+
+
+ipcMain.handle('open-save-folder-dialog', async () => {
+  const result = await dialog.showSaveDialog({
+    title: 'Save Config File',
+    defaultPath: path.join(app.getPath('documents'), 'stream-settings.json'), // default filename
+    filters: [
+      { name: 'JSON Files', extensions: ['json'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return null;
+  }
+
+  const sourcePath = path.join(app.getPath('userData'), 'settings.json'); // or whatever your actual file is
+
+  try {
+    await fs.promises.copyFile(sourcePath, result.filePath);
+    return result.filePath;
+  } catch (err) {
+    console.error('❌ Error saving config file:', err);
+    throw err;
+  }
+});
 
 
 
@@ -1180,6 +1262,7 @@ ipcMain.on('save-settings', (event, settings, fromApi = false) => {
     // Prepare the settings object to be saved
     const settingsToSave = {
         mountpoint: settings.mountpoint || '',
+        username: settings.username || '',
         sourcepassword: settings.sourcepassword || '',
         icecastHost: settings.icecastHost || '',
         icecastPort: settings.icecastPort || '',
