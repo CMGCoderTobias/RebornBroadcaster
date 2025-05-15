@@ -7,36 +7,51 @@ const tcpPort = 8010;
 let isApiConnected = false;
 let apiSocket = null;
 
-// Create and start the TCP server
+// Start the TCP server
 const server = net.createServer((socket) => {
     console.log('📡 API Client connected via TCP');
     isApiConnected = true;
     apiSocket = socket;
 
-    let clientEncoding = 'utf8'; // Default encoding until handshake
+    let clientEncoding = 'utf8';
     let handshakeDone = false;
     let lastHeartbeat = Date.now();
 
     // 💓 Heartbeat monitor
     const heartbeatInterval = setInterval(() => {
-        if (Date.now() - lastHeartbeat > 70000) { // 35 seconds without any data
-            console.warn('💀 Heartbeat timeout. retrying dead socket.');
-            socket.destroy(); // Forcefully close
+        if (Date.now() - lastHeartbeat > 70000) {
+            console.warn('💀 Heartbeat timeout. Killing dead socket.');
+            cleanupSocket();
         }
-    }, 35000); // Check every 10 seconds
+    }, 35000);
 
+    // 🧹 Cleanup handler
+    function cleanupSocket() {
+        if (socket && !socket.destroyed) {
+            try {
+                socket.destroy();
+            } catch (_) {
+                // ignore
+            }
+        }
+
+        clearInterval(heartbeatInterval);
+        isApiConnected = false;
+        apiSocket = null;
+
+        console.log('🧹 Cleaned up socket connection');
+    }
+
+    // 📩 Data handler
     socket.on('data', async (data) => {
         lastHeartbeat = Date.now();
 
         try {
-            // 🔥 Protect entire handler inside try-catch
-
-            // Initial handshake (ASCII only)
             if (!handshakeDone) {
                 const header = data.toString('ascii').trim();
                 if (header.startsWith('ENCODING:')) {
-                    socket.clientEncoding = header.split(':')[1].trim().toLowerCase();
-                    clientEncoding = socket.clientEncoding;
+                    clientEncoding = header.split(':')[1].trim().toLowerCase();
+                    socket.clientEncoding = clientEncoding;
                     handshakeDone = true;
                     socket.write(`Server encoding set to: ${clientEncoding}\n`, 'ascii');
                     console.log(`[Electron] Client encoding: ${clientEncoding}`);
@@ -58,7 +73,6 @@ const server = net.createServer((socket) => {
 
             let response = '';
 
-            // Handle special commands first
             if (raw.startsWith('save-settings:')) {
                 ipcMain.emit('api-save-settings', null, raw.slice('save-settings:'.length).trim());
                 response = 'Settings saved.';
@@ -66,7 +80,6 @@ const server = net.createServer((socket) => {
                 ipcMain.emit('api-request-get-settings');
                 response = 'Requested settings.';
             } else {
-                // Switch command handling
                 switch (raw) {
                     case 'start-stream':
                         ipcMain.emit('start-stream');
@@ -92,7 +105,21 @@ const server = net.createServer((socket) => {
                             sender: 'Api',
                             callType: 'Warning'
                         });
+
                         response = 'Closing app.';
+
+                        // Graceful disconnect
+                        if (socket && !socket.destroyed && socket.writable) {
+                            socket.write(iconv.encode('Server closing the connection.\n', clientEncoding));
+                            setTimeout(() => {
+                                try {
+                                    if (!socket.destroyed) socket.end(); // Graceful end
+                                } catch (_) {
+                                    // Ignore
+                                }
+                            }, 500);
+                        }
+
                         break;
                     case 'open-app':
                         ipcMain.emit('open-renderer');
@@ -100,57 +127,48 @@ const server = net.createServer((socket) => {
                         break;
                     default:
                         response = 'Unknown command.';
+                        break;
                 }
             }
 
-            // ✅ Always send back response (even if empty)
-            socket.write(iconv.encode(`${response}\n`, clientEncoding));
-        } catch (error) {
-            console.error('🔥 Fatal error in TCP handler:', error);
-
-            try {
-                socket.write(iconv.encode(`❌ Internal server error: ${error.message}\n`, clientEncoding));
-            } catch (sendErr) {
-                console.error('❌ Failed to send error back to client:', sendErr);
+            if (response && socket.writable && !socket.destroyed) {
+                socket.write(iconv.encode(`${response}\n`, clientEncoding));
             }
+        } catch (error) {
+            console.error('🔥 Error in TCP handler:', error);
+            try {
+                if (socket && !socket.destroyed && socket.writable) {
+                    socket.write(iconv.encode(`❌ Server error: ${error.message}\n`, clientEncoding));
+                }
+            } catch (_) {}
         }
     });
 
+    // Cleanup on disconnects or errors
     socket.on('end', () => {
-        console.log('🔌 API Client disconnected');
-        clearInterval(heartbeatInterval); // Stop the heartbeat interval
-        isApiConnected = false;
-        apiSocket = null;
+        console.log('🔌 Client ended connection');
+        cleanupSocket();
     });
 
     socket.on('error', (err) => {
         console.error('⚠️ TCP Socket error:', err);
-        clearInterval(heartbeatInterval); // Stop the heartbeat interval
-        isApiConnected = false;
-        apiSocket = null;
+        cleanupSocket();
     });
 
     socket.on('close', (hadError) => {
-        if (hadError) {
-            console.error('Connection closed with error');
-        } else {
-            console.log('Connection closed cleanly');
-        }
-
-        // Optionally send a "goodbye" message before closing
-        socket.write('Server closing the connection.\n');
-        socket.end(); // Gracefully close the server-side connection
+        console.log(hadError ? '💥 Socket closed with error' : '👋 Socket closed cleanly');
+        cleanupSocket();
     });
 });
 
-// Start TCP server listening on specified port
+// Start the server
 function startTCPServer() {
     server.listen(tcpPort, () => {
         console.log(`✅ TCP server listening on port ${tcpPort}`);
     });
 }
 
-// Exports for external interactions
+// Export functions
 function getApiSocket() {
     return apiSocket;
 }
