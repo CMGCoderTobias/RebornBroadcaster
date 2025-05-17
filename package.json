@@ -1,17 +1,18 @@
 {
   "name": "rebornbroadcaster",
-  "version": "0.0.5",
+  "version": "0.0.7",
   "main": "main.js",
+  "description": "A powerful broadcaster app for media professionals.",
+  "author": "ConliffeMediaGroup",
+  "license": "ISC",
   "scripts": {
     "start": "electron .",
     "start-headless": "electron . --headless",
     "build": "electron-builder"
   },
   "keywords": [],
-  "author": "ConliffeMediaGroup",
-  "license": "ISC",
-  "description": "A powerful broadcaster app for media professionals.",
   "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "axios": "^1.8.4",
     "electron-updater": "^6.6.2",
     "iconv-lite": "^0.6.3",
@@ -31,6 +32,12 @@
     },
     "files": [
       "**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/@ffmpeg-installer/ffmpeg",
+        "to": "ffmpeg"
+      }
     ],
     "win": {
       "target": "nsis",

@@ -9,22 +9,25 @@ const { listenerCount } = require('process');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { autoUpdater } = require('electron-updater');
 const isDev = !app.isPackaged; // Correctly detects if running in dev mode
+const ffmpegPath = isDev
+  ? require('@ffmpeg-installer/ffmpeg').path
+  : path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', '@ffmpeg-installer', 'win32-x64', 'ffmpeg.exe');
 
 
 
-function createDownloadingWindow() {
-    downloadingWindow = new BrowserWindow({
-      width: 400,
-      height: 200,
-      frame: false,
-      webPreferences: {
-        preload: path.join(__dirname, 'src', 'preload.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
-    });
-    downloadingWindow.loadFile(path.join(__dirname, 'downloading.html'));  // Show "Downloading..." page
-  }
+    function createDownloadingWindow() {
+        downloadingWindow = new BrowserWindow({
+        width: 400,
+        height: 200,
+        frame: false,
+        webPreferences: {
+            preload: path.join(__dirname, 'src', 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+        },
+        });
+        downloadingWindow.loadFile(path.join(__dirname, 'downloading.html'));  // Show "Downloading..." page
+    }
   
   // Function to handle app initialization
   function initializeApp() {
@@ -183,38 +186,37 @@ async function handleAppClose(sender, callType) {
             }
             break;
 
-        case 'Warning':
+       case 'Warning':
             if (sender === 'Api') {
+                // 1. Disconnect API first if connected
+                if (isApiConnected) {
+                    await sendToApi({ type: 'disconnect', reason: 'graceful' });
+                    global.apiSocket?.end(() => {
+                        console.log('API socket disconnected.');
+                    });
+                }
+
+                // 2. If window visible, ask user whether to close the app
                 if (!isHeadless && mainWindow) {
-                    console.log('[Api] Warning: prompting user before shutdown...');
+                    console.log('[Api] Warning: prompting user to close app...');
+
                     const { response } = await dialog.showMessageBox(mainWindow, {
                         type: 'question',
-                        buttons: ['Close App', 'Disconnect API'],
+                        buttons: ['Yes, Close', 'No'],
                         defaultId: 0,
                         cancelId: 1,
                         title: 'RebornBroadcaster',
-                        message: 'The API has requested to close the app.',
-                        detail: 'Do you want to close RebornBroadcaster completely, or just disconnect the API?',
+                        message: 'The API requested to close the app.',
+                        detail: 'Do you want to close RebornBroadcaster now?',
                     });
 
                     if (response === 0) {
                         await handleAppClose('Api', 'Total');
                     } else {
-                        if (isApiConnected) {
-                            await sendToApi({ type: 'disconnect', reason: 'graceful' });
-                            global.apiSocket?.end(() => {
-                                console.log('API socket disconnected.');
-                            });
-                        }
+                        console.log('[Api] User chose not to close app. API already disconnected.');
                     }
                 } else {
-                    console.log('[Api] Headless mode detected, shutting down');
-                    if (isApiConnected) {
-                        await sendToApi({ type: 'disconnect', reason: 'graceful' });
-                        global.apiSocket?.end(() => {
-                            console.log('API socket disconnected.');
-                        });
-                    }
+                    console.log('[Api] Headless or no window – closing app');
                     gracefulShutdown();
                 }
             } else if (sender === 'Renderer') {
@@ -484,7 +486,7 @@ function openSettings() {
 async function loadAudioDevices() {
     console.log("Loading audio devices on app startup...");
 
-    exec('ffmpeg -list_devices true -f dshow -i dummy', (error, stdout, stderr) => {
+    exec(`"${ffmpegPath}" -list_devices true -f dshow -i dummy`, (error, stdout, stderr) => {
         if (error) {
             console.error("Error loading audio devices on app startup:", error.message);
             return;
@@ -566,7 +568,7 @@ async function startStream({ settings, event = null, respond = null }) {
     console.log("🚀 Starting FFmpeg with:\n", ffmpegArgs.join(' '));
 
     try {
-        ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+        ffmpegProcess = spawn(`${ffmpegPath}`, ffmpegArgs);
         isStreaming = true;
 
         let streamStarted = false;
@@ -736,7 +738,7 @@ async function startRecording({ settings, event = null, respond = null }) {
 
     try {
         // Spawn the FFmpeg process
-        ffmpegRecordingProcess = spawn('ffmpeg', ffmpegArgs);
+        ffmpegRecordingProcess = spawn(`${ffmpegPath}`, ffmpegArgs);
         isRecording = true;
 
         let recordingStarted = false;
@@ -1193,65 +1195,67 @@ ipcMain.on('open-settings-window', () => {
 });
 
 
+
 ipcMain.on('get-audio-sources', async (event) => {
     console.log("Received 'get-audio-sources' request from:", event.sender.id);
 
-    // Check if devices are already cached
     if (audioDevicesCache.length > 0) {
         console.log("Returning cached audio devices:", audioDevicesCache);
         event.sender.send('get-audio-sources-reply', { devices: audioDevicesCache });
         return;
     }
 
-    // If not cached, run FFmpeg to get devices
-    exec('ffmpeg -list_devices true -f dshow -i dummy', (error, stdout, stderr) => {
-        console.log("Running FFmpeg command...");
+    console.log("Running FFmpeg command to list devices...");
 
-        if (error) {
-            console.error("FFmpeg execution error:", error.message);
-            event.sender.send('get-audio-sources-reply', { error: error.message });
+    exec(`"${ffmpegPath}" -list_devices true -f dshow -i dummy`, (error, stdout, stderr) => {
+        const output = stdout + '\n' + stderr;
+        const lines = output.split('\n').map(line => line.trim());
+
+        // Find the index where DirectShow audio devices section starts
+        const audioSectionIndex = lines.findIndex(line => line.toLowerCase().includes('directshow audio devices'));
+
+        if (audioSectionIndex === -1) {
+            console.error("DirectShow audio devices section not found!");
+            event.sender.send('get-audio-sources-reply', { error: "No DirectShow audio devices found" });
             return;
         }
 
-        if (stderr) {
-            console.warn("FFmpeg stderr output:", stderr);
+        // Extract lines under that section until next section or end
+        // Usually next section starts with "DirectShow video devices" or empty line
+        const devices = [];
+        for (let i = audioSectionIndex + 1; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.toLowerCase().includes('directshow video devices') || line === '') {
+                break; // End of audio devices section
+            }
+            // Skip alternative name lines
+            if (line.toLowerCase().includes('alternative name')) {
+                continue;
+            }
+            // Extract device name in quotes
+            const match = line.match(/"(.+?)"/);
+            if (match) {
+                devices.push(match[1]);
+            }
         }
-
-        const output = (stdout + '\n' + stderr).split('\n');
-        const devices = output.filter(line => line.includes('audio'));
 
         if (devices.length === 0) {
-            console.error("No audio devices found!");
-            event.sender.send('get-audio-sources-reply', { error: "No audio devices found" });
-            return;
-        }
-
-        // Log devices to verify parsing
-        console.log("Found devices:", devices);
-
-        const deviceList = devices.map((line, index) => {
-            const match = line.match(/"(.+)"/);
-            if (match) {
-                return { id: index, name: match[1] };
-            } else {
-                console.warn(`Failed to parse line: ${line}`);
-                return null;
-            }
-        }).filter(Boolean);
-
-        if (deviceList.length === 0) {
-            console.error("No valid audio devices parsed.");
+            console.error("No valid audio devices parsed in DirectShow section.");
             event.sender.send('get-audio-sources-reply', { error: "No valid audio devices found" });
             return;
         }
 
-        // Cache the devices for future requests
-        audioDevicesCache.push(...deviceList);
+        // Format as array of objects with id and name
+        const deviceList = devices.map((name, idx) => ({ id: idx, name }));
 
-        console.log("Found and cached audio devices:", deviceList);
+        audioDevicesCache.push(...deviceList);
+        console.log("Found and cached DirectShow audio devices:", deviceList);
         event.sender.send('get-audio-sources-reply', { devices: deviceList });
     });
 });
+
+
+
 
 
 

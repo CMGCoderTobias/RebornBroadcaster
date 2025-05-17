@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('electron', {
 
 
   getCachedAudioSources: () => ipcRenderer.send('get-audio-sources'),
+  
 
   startStream: () =>
     new Promise((resolve, reject) => {
