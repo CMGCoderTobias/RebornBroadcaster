@@ -11,28 +11,33 @@
     <div class="page-wrapper">
               <div class="drag-area">
         <div class="window-controls">
-            <button id="minimizeBtn">—</button>
-            <button id="closeBtn">×</button>
+            <button id="minimizeBtn">&mdash;</button>
+            <button id="closeBtn">&times;</button>
           </div></div>
           
         <!-- Content Wrapper with White Background inside the gradient border -->
         <div class="content-wrapper">
-    <div class="btn-container">
+            <div class="settings-layout">
+                <div class="settings-sidebar" role="navigation" aria-label="Settings sections">
+                    <button type="button" class="settings-tab" data-panel="status">Status</button>
+                    <button type="button" class="settings-tab active" data-panel="stream">Stream</button>
+                    <button type="button" class="settings-tab" data-panel="audio">Audio</button>
+                    <button type="button" class="settings-tab" data-panel="recording">Recording</button>
+                    <button type="button" class="settings-tab" data-panel="config">Config</button>
+                </div>
 
-        <button class="btn-upload" id="confupload">
-         <span class="arrow up"></span> Upload
-        </button>
-
-        <button class ="btn-download" id="confdownload">
-        <span class="arrow down"></span> Download
-        </button>
-    </div>
-
-
+                <div class="settings-main">
             <div class="settings-container">
                 <h2>Stream Settings</h2>
 
                 <form id="settingsForm">
+                    <div class="settings-panel" data-panel="status">
+                        <h3 style="margin-top: 0;">Runtime</h3>
+                        <div id="statusSnapshot" style="white-space: pre-wrap; background: #111; color: #0f0; padding: 10px; border: 1px solid #333; border-radius: 10px; font-family: monospace;"></div>
+                        <button type="button" id="refreshStatusButton" style="margin-top: 10px;">Refresh Status</button>
+                    </div>
+
+                    <div class="settings-panel active" data-panel="stream">
                     <div class="form-group">
                         <label for="mountpoint">Mountpoint</label>
                         <input type="text" id="mountpoint" name="mountpoint" value="" required />
@@ -50,47 +55,122 @@
                     
                     <div class="form-group">
                         <label for="hostIP">Ip Address</label>
-                        <input type="IP" id="hostIP" name="hostIP" value="" required />
+                        <input type="text" id="hostIP" name="hostIP" value="" inputmode="decimal" placeholder="127.0.0.1" required />
                     </div>
 
                     <div class="form-group">
                         <label for="hostPort">Port</label>
-                        <input type="port" id="hostPort" name="hostPort" value="" required />
+                        <input type="number" id="hostPort" name="hostPort" value="" min="1" max="65535" step="1" placeholder="8000" required />
+                    </div>
+
+                    <h3>Icecast Stream Info (optional)</h3>
+
+                    <div class="form-group">
+                        <label for="streamName">Stream Name</label>
+                        <input type="text" id="streamName" name="streamName" value="" placeholder="KOS Radio" />
                     </div>
 
                     <div class="form-group">
-                        <label for="encoding">Encoding Type</label>
-                        <select id="encoding" name="encoding">
-                            <option value="mp3">MP3</option>
-                            <option value="aac">AAC</option>
-                            <option value="flac">FLAC</option>
-                            <option value="opus">Opus</option>
+                        <label for="streamGenre">Genre</label>
+                        <input type="text" id="streamGenre" name="streamGenre" value="" placeholder="Variety" />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="streamDescription">Description</label>
+                        <input type="text" id="streamDescription" name="streamDescription" value="" placeholder="Live broadcast" />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="streamUrl">Website URL</label>
+                        <input type="text" id="streamUrl" name="streamUrl" value="" placeholder="https://example.com" />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="streamPublic">Public Listing</label>
+                        <select id="streamPublic" name="streamPublic">
+                            <option value="0">No</option>
+                            <option value="1">Yes</option>
                         </select>
                     </div>
 
                     <div class="form-group">
-                        <label for="audioSource">Audio Source</label>
-                        <select id="audioSource" name="audioSource">
-                            <!-- Options will be dynamically filled -->
-                        </select>
+                        <button type="button" id="testIcecastButton">Test Icecast</button>
+                        <div id="icecastTestResult" style="margin-top: 8px; font-family: monospace;"></div>
                     </div>
 
                     <div class="form-group">
-                        <label for="bitrate">Bitrate (kbps)</label>
-                        <input type="number" id="bitrate" name="bitrate" min="32" max="320" step="32" value="128" required />
+                        <button type="button" id="testListenUrlButton">Test Listen URL</button>
+                        <div id="listenUrlTestResult" style="margin-top: 8px; font-family: monospace;"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="nowPlaying">Now Playing (optional)</label>
+                        <input type="text" id="nowPlaying" name="nowPlaying" value="" placeholder="Artist - Title" />
+                        <button type="button" id="updateNowPlayingButton" style="margin-top: 8px;">Update Now Playing</button>
+                        <div id="nowPlayingResult" style="margin-top: 8px; font-family: monospace;"></div>
+                    </div>
+                    </div>
+
+                    <div class="settings-panel" data-panel="audio">
+                        <div class="form-group">
+                            <label for="encoding">Encoding Type</label>
+                            <select id="encoding" name="encoding">
+                                <option value="mp3">MP3</option>
+                                <option value="aac">AAC</option>
+                                <option value="flac">FLAC</option>
+                                <option value="opus">Opus</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="audioSource">Audio Source</label>
+                            <select id="audioSource" name="audioSource">
+                                <!-- Options will be dynamically filled -->
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="bitrate">Bitrate (kbps)</label>
+                            <input type="number" id="bitrate" name="bitrate" min="32" max="320" step="32" value="128" required />
+                        </div>
                     </div>
 
                     <!-- Add this below your other form elements in settings.html -->
-                    <div class="form-group">
-                        <label for="recordingPath">Recording Path</label>
-                        <div class="input-group">
-                            <input type="text" id="recordingPath" name="recordingPath" value="" readonly />
-                            <button type="button" id="browseButton">Browse...</button>
+                    <div class="settings-panel" data-panel="recording">
+                        <div class="form-group">
+                            <label for="recordingPath">Recording Path</label>
+                            <div class="input-group">
+                                <input type="text" id="recordingPath" name="recordingPath" value="" readonly />
+                                <button type="button" id="browseButton">Browse...</button>
+                            </div>
                         </div>
+                        <p style="margin-top: 0;">Recording uses the selected audio device and encoding type.</p>
+                    </div>
+
+                    <div class="settings-panel" data-panel="config">
+                        <div class="btn-container" style="margin-bottom: 12px;">
+                            <button class="btn-upload" id="confupload" type="button">
+                                <span class="arrow up"></span> Import Config
+                            </button>
+
+                            <button class="btn-download" id="confdownload" type="button">
+                                <span class="arrow down"></span> Export Config
+                            </button>
+                        </div>
+                        <div class="form-group" style="margin-bottom: 8px;">
+                            <label style="display: flex; gap: 8px; align-items: center;">
+                                <input type="checkbox" id="includeSecrets" />
+                                Include passwords in export
+                            </label>
+                        </div>
+                        <div id="configResult" style="margin-top: 8px; font-family: monospace;"></div>
+                        <p style="margin-top: 0;">Import/export stream settings as JSON for quick setup on other machines.</p>
                     </div>
 
                     <button type="submit">Save Settings</button>
                 </form>
+            </div>
+                </div>
             </div>
         </div>
     </div>

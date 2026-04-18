@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electron', {
   loadSettings: () => {
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Timeout waiting for load-settings response')), 50000); // 10s timeout
+      const timeout = setTimeout(() => reject(new Error('Timeout waiting for load-settings response')), 15000);
       ipcRenderer.once('load-settings-response', (event, settings) => {
         clearTimeout(timeout);
         resolve(settings);
@@ -15,7 +15,7 @@ contextBridge.exposeInMainWorld('electron', {
 
   saveSettings: (settings) => ipcRenderer.send('save-settings', settings),
 
-  logMessage: (callback) => ipcRenderer.on('log-message', (_, message) => callback(message)),
+  onLogMessage: (callback) => ipcRenderer.on('log-message', (_, message) => callback(message)),
 
 
   getCachedAudioSources: () => ipcRenderer.send('get-audio-sources'),
@@ -36,7 +36,7 @@ contextBridge.exposeInMainWorld('electron', {
             if (response.success) {
                 resolve(response);
             } else {
-                reject(new Error(response.error || 'Unknown error starting stream'));
+                reject(new Error(response.message || response.error || 'Unknown error starting stream'));
             }
         });
 
@@ -48,7 +48,7 @@ contextBridge.exposeInMainWorld('electron', {
 
   stopStream: () =>
     new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Timeout waiting for stop-stream response')), 15000); // 5s timeout
+      const timeout = setTimeout(() => reject(new Error('Timeout waiting for stop-stream response')), 15000);
       ipcRenderer.once('stop-stream-response', (event, response) => {
         clearTimeout(timeout);
         resolve(response);
@@ -56,11 +56,15 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.send('stop-stream');
     }),
 
-  startRecording: (event, response) =>
+  startRecording: () =>
     new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Timeout waiting for start-recording response')), 5000); // 5s timeout
+      const timeout = setTimeout(() => reject(new Error('Timeout waiting for start-recording response')), 15000);
       ipcRenderer.once('start-recording-response', (event, response) => {
         clearTimeout(timeout);
+        if (response && typeof response === 'object' && response.success === false) {
+          reject(new Error(response.message || 'Failed to start recording'));
+          return;
+        }
         resolve(response);
       });
       ipcRenderer.send('start-recording');
@@ -68,7 +72,7 @@ contextBridge.exposeInMainWorld('electron', {
 
   stopRecording: () =>
     new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Timeout waiting for stop-recording response')), 5000); // 5s timeout
+      const timeout = setTimeout(() => reject(new Error('Timeout waiting for stop-recording response')), 15000);
       ipcRenderer.once('stop-recording-response', (event, response) => {
         clearTimeout(timeout);
         resolve(response);
@@ -77,6 +81,15 @@ contextBridge.exposeInMainWorld('electron', {
     }),
 
   openSettings: () => ipcRenderer.send('open-settings-window'),
+  openAbout: () => ipcRenderer.send('open-about-window'),
+
+  getAppInfo: () => ipcRenderer.invoke('get-app-info'),
+  getThirdPartyNotices: () => ipcRenderer.invoke('get-third-party-notices'),
+  testIcecast: (params) => ipcRenderer.invoke('icecast-test', params),
+  updateNowPlaying: (params) => ipcRenderer.invoke('icecast-update-now-playing', params),
+  testListenUrl: (params) => ipcRenderer.invoke('icecast-test-listen-url', params),
+  exportConfig: (params) => ipcRenderer.invoke('export-config', params),
+  getState: () => ipcRenderer.invoke('get-state'),
 
   StreamStatus: () =>
     new Promise((resolve, reject) => {
@@ -113,12 +126,10 @@ contextBridge.exposeInMainWorld('electron', {
   onTimerUpdate: (callback) => ipcRenderer.on('timer-update', callback),
   onStandby: (callback) => ipcRenderer.on('standby', callback),
 
-  // Adding event listener for stream and recording status updates
-  onStreamStatusUpdate: (callback) => ipcRenderer.on('get-stream-status-response', callback),
-  onRecordingStatusUpdate: (callback) => ipcRenderer.on('get-recording-status-response', callback),
   onListenerCountUpdate: (callback) => ipcRenderer.on('listener-count-updated', (event, count) => callback(count)),
 
   onStreamStatusUpdate: (callback) => ipcRenderer.on('stream-status-updated', (event, status) => callback(status)),
+  onRecordingStatusUpdate: (callback) => ipcRenderer.on('recording-status-updated', (event, status) => callback(status)),
   requestAppClose: (callType = 'Warning') => {
     ipcRenderer.send('request-app-close', {
         sender: 'Renderer',

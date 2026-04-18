@@ -1,0 +1,35 @@
+RebornBroadcaster — Third-Party Notices
+
+This file summarizes notable third-party software included with this application.
+It is not an exhaustive inventory of every transitive dependency.
+
+Notable components:
+
+1) Electron (MIT License)
+   https://www.electronjs.org/
+
+2) Node.js (MIT License)
+   https://nodejs.org/
+
+3) FFmpeg binary distributed via @ffmpeg-installer/ffmpeg (package license: LGPL-2.1)
+   https://github.com/kribblo/node-ffmpeg-installer
+   FFmpeg itself is a separate project with its own licensing terms.
+   If you redistribute this application, make sure you comply with FFmpeg’s license requirements
+   for the particular FFmpeg build you ship.
+
+Other direct dependencies used by this app (see their repositories for license text):
+- axios
+- electron-updater
+- electron-builder (build-time)
+- iconv-lite
+- node-fetch
+
+Broadcasting / Licensing Notice (Non-Legal Advice)
+
+RebornBroadcaster is a broadcasting tool. It does not grant or include any music licensing or broadcast rights.
+If you stream copyrighted recordings or compositions (including internet radio), you may need licenses and/or
+royalty reporting with the appropriate rights organizations in your region (for example: performance rights
+organizations and digital performance/neighboring rights administrators).
+
+You (the broadcaster/station/operator) are responsible for compliance with all applicable laws, regulations,
+royalty reporting, and any third-party terms (including the Icecast server’s policies and your hosting provider).

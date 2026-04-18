@@ -17,8 +17,53 @@ window.addEventListener('DOMContentLoaded', () => {
         const confupload = document.getElementById('confupload');
         const icecastHostInput = document.getElementById('hostIP');
         const icecastPortInput = document.getElementById('hostPort');
+        const streamNameInput = document.getElementById('streamName');
+        const streamGenreInput = document.getElementById('streamGenre');
+        const streamDescriptionInput = document.getElementById('streamDescription');
+        const streamUrlInput = document.getElementById('streamUrl');
+        const streamPublicSelect = document.getElementById('streamPublic');
+        const testIcecastButton = document.getElementById('testIcecastButton');
+        const icecastTestResult = document.getElementById('icecastTestResult');
+        const testListenUrlButton = document.getElementById('testListenUrlButton');
+        const listenUrlTestResult = document.getElementById('listenUrlTestResult');
+        const nowPlayingInput = document.getElementById('nowPlaying');
+        const updateNowPlayingButton = document.getElementById('updateNowPlayingButton');
+        const nowPlayingResult = document.getElementById('nowPlayingResult');
+        const includeSecretsCheckbox = document.getElementById('includeSecrets');
+        const configResult = document.getElementById('configResult');
+        const statusSnapshot = document.getElementById('statusSnapshot');
+        const refreshStatusButton = document.getElementById('refreshStatusButton');
 
         let cachedDevices = []; // Store devices to compare later
+
+        // Settings panels
+        const tabs = Array.from(document.querySelectorAll('.settings-tab'));
+        const panels = Array.from(document.querySelectorAll('.settings-panel'));
+
+        function activatePanel(panelName) {
+            tabs.forEach(t => t.classList.toggle('active', t.dataset.panel === panelName));
+            panels.forEach(p => p.classList.toggle('active', p.dataset.panel === panelName));
+        }
+
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => activatePanel(tab.dataset.panel));
+        });
+
+        activatePanel('stream');
+
+        async function refreshStatus() {
+            if (!statusSnapshot) return;
+            statusSnapshot.textContent = 'Loading...';
+            try {
+                const state = await window.electron.getState();
+                statusSnapshot.textContent = JSON.stringify(state, null, 2);
+            } catch (err) {
+                statusSnapshot.textContent = `Failed to load status: ${err?.message || err}`;
+            }
+        }
+
+        refreshStatusButton?.addEventListener('click', refreshStatus);
+        refreshStatus();
 
         // Request audio sources on page load
         if (typeof window.electron.getCachedAudioSources === 'function') {
@@ -73,6 +118,12 @@ window.addEventListener('DOMContentLoaded', () => {
                 if (sourcePasswordInput) sourcePasswordInput.value = settings.sourcepassword || '';
                 if (icecastHostInput) icecastHostInput.value = settings.icecastHost || '';
                 if (icecastPortInput) icecastPortInput.value = settings.icecastPort || '';
+                if (streamNameInput) streamNameInput.value = settings.streamName || '';
+                if (streamGenreInput) streamGenreInput.value = settings.streamGenre || '';
+                if (streamDescriptionInput) streamDescriptionInput.value = settings.streamDescription || '';
+                if (streamUrlInput) streamUrlInput.value = settings.streamUrl || '';
+                if (streamPublicSelect) streamPublicSelect.value = String(settings.streamPublic ?? '0');
+                if (nowPlayingInput) nowPlayingInput.value = settings.nowPlaying || '';
                 if (encodingTypeSelect) encodingTypeSelect.value = settings.encodingType || 'mp3';
                 if (bitrateInput) bitrateInput.value = settings.bitrate || 128;
                 if (pathInput) pathInput.value = settings.recordingPath || '';
@@ -123,11 +174,17 @@ window.addEventListener('DOMContentLoaded', () => {
                 sourcepassword: sourcePasswordInput.value.trim(),
                 icecastHost: icecastHostInput.value.trim(),
                 icecastPort: icecastPortInput.value.trim(),
+                streamName: streamNameInput?.value?.trim() || '',
+                streamGenre: streamGenreInput?.value?.trim() || '',
+                streamDescription: streamDescriptionInput?.value?.trim() || '',
+                streamUrl: streamUrlInput?.value?.trim() || '',
+                streamPublic: streamPublicSelect?.value ?? '0',
                 encodingType: encodingTypeSelect.value,
                 audioSourceId: selectedDeviceId || '',
                 audioSourceName: selectedDeviceName || '',
                 bitrate: parseInt(bitrateInput.value),
-                recordingPath: pathInput.value.trim()
+                recordingPath: pathInput.value.trim(),
+                nowPlaying: nowPlayingInput?.value?.trim() || ''
             };
 
             try {
@@ -135,6 +192,83 @@ window.addEventListener('DOMContentLoaded', () => {
                 console.log('✅ Settings saved:', settings);
             } catch (error) {
                 console.error('❌ Error saving settings:', error);
+            }
+        });
+
+        testIcecastButton?.addEventListener('click', async () => {
+            if (icecastTestResult) icecastTestResult.textContent = 'Testing...';
+
+            try {
+                const result = await window.electron.testIcecast({
+                    icecastHost: icecastHostInput?.value?.trim(),
+                    icecastPort: icecastPortInput?.value?.trim(),
+                    mountpoint: mountpointInput?.value?.trim(),
+                });
+
+                if (!icecastTestResult) return;
+
+                if (!result?.ok) {
+                    icecastTestResult.textContent = `FAIL: ${result?.message || 'Unknown error'}`;
+                    return;
+                }
+
+                if (result.mountFound) {
+                    icecastTestResult.textContent = `OK: Mount ${result.mount} online, listeners=${result.listeners}`;
+                } else {
+                    const mounts = Array.isArray(result.mounts) && result.mounts.length
+                        ? ` (found: ${result.mounts.map(m => m.mount).join(', ')})`
+                        : '';
+                    icecastTestResult.textContent = `OK: Icecast reachable; mount ${result.mount} not listed in status-json${mounts}`;
+                }
+            } catch (err) {
+                if (icecastTestResult) icecastTestResult.textContent = `FAIL: ${err?.message || err}`;
+            }
+        });
+
+        testListenUrlButton?.addEventListener('click', async () => {
+            if (listenUrlTestResult) listenUrlTestResult.textContent = 'Testing...';
+
+            try {
+                const result = await window.electron.testListenUrl({
+                    icecastHost: icecastHostInput?.value?.trim(),
+                    icecastPort: icecastPortInput?.value?.trim(),
+                    mountpoint: mountpointInput?.value?.trim(),
+                });
+
+                if (!listenUrlTestResult) return;
+
+                if (!result?.ok) {
+                    listenUrlTestResult.textContent = `FAIL: ${result?.message || 'Unknown error'}`;
+                    return;
+                }
+
+                const extra = result.contentType ? ` content-type=${result.contentType}` : '';
+                listenUrlTestResult.textContent = `OK: ${result.url} HTTP ${result.status}${extra}`;
+            } catch (err) {
+                if (listenUrlTestResult) listenUrlTestResult.textContent = `FAIL: ${err?.message || err}`;
+            }
+        });
+
+        updateNowPlayingButton?.addEventListener('click', async () => {
+            if (nowPlayingResult) nowPlayingResult.textContent = 'Updating...';
+
+            try {
+                const result = await window.electron.updateNowPlaying({
+                    icecastHost: icecastHostInput?.value?.trim(),
+                    icecastPort: icecastPortInput?.value?.trim(),
+                    mountpoint: mountpointInput?.value?.trim(),
+                    nowPlaying: nowPlayingInput?.value?.trim(),
+                });
+
+                if (!nowPlayingResult) return;
+                if (!result?.ok) {
+                    nowPlayingResult.textContent = `FAIL: ${result?.message || 'Unknown error'}`;
+                    return;
+                }
+
+                nowPlayingResult.textContent = 'OK: Updated';
+            } catch (err) {
+                if (nowPlayingResult) nowPlayingResult.textContent = `FAIL: ${err?.message || err}`;
             }
         });
 
@@ -161,15 +295,19 @@ window.addEventListener('DOMContentLoaded', () => {
 
 
         confdownload.addEventListener('click', async () => {
-          try {
-            const saveFolder = await window.electron.downloadconf();
-            if (saveFolder) {
-              pathInput.value = saveFolder;  // or wherever you want to save the folder path
-              console.log('Selected folder to save config:', saveFolder);
+            if (configResult) configResult.textContent = 'Exporting...';
+            try {
+                const includeSecrets = !!includeSecretsCheckbox?.checked;
+                const result = await window.electron.exportConfig({ includeSecrets });
+                if (configResult) {
+                    configResult.textContent = result?.filePath
+                        ? `OK: Exported to ${result.filePath}`
+                        : 'Canceled';
+                }
+            } catch (error) {
+                console.error("❌ Error exporting config:", error);
+                if (configResult) configResult.textContent = `FAIL: ${error?.message || error}`;
             }
-          } catch (error) {
-            console.error("❌ Error selecting folder to save config:", error);
-          }
         });
 
     } catch (error) {

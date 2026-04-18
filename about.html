@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>About</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-wrapper">
+    <div class="drag-area">
+      <div class="window-controls">
+        <button id="minimizeBtn">&mdash;</button>
+        <button id="closeBtn">&times;</button>
+      </div>
+    </div>
+
+    <div class="content-wrapper">
+      <div class="settings-container">
+        <h2>About RebornBroadcaster</h2>
+
+        <div class="info-panel" style="margin-bottom: 12px;">
+          <p id="appInfoLine">Loading…</p>
+        </div>
+
+        <h3>Third-Party Notices</h3>
+        <p style="margin-top: 0;">This app includes third-party software. The notices below are provided for convenience.</p>
+
+        <div id="noticesBox" style="white-space: pre-wrap; background: #111; color: #0f0; padding: 10px; border: 1px solid #333; height: 340px; overflow: auto; font-family: monospace;"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="aboutRenderer.js"></script>
+</body>
+</html>
+

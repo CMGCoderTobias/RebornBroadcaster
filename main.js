@@ -8,20 +8,119 @@ const iconv = require('iconv-lite');
 const { listenerCount } = require('process');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { autoUpdater } = require('electron-updater');
+const REBORN_UPDATE_FEED_URL = process.env.REBORN_UPDATE_FEED_URL || '';
+const _REBORN_PRIMARY_GITHUB_TOKEN = process.env.REBORN_GITHUB_TOKEN || '';
+const _REBORN_LEGACY_GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || '';
+if (!_REBORN_PRIMARY_GITHUB_TOKEN && _REBORN_LEGACY_GITHUB_TOKEN) {
+  console.warn('Using legacy GH_TOKEN/GITHUB_TOKEN. Please migrate to REBORN_GITHUB_TOKEN.');
+}
+const REBORN_GITHUB_TOKEN = _REBORN_PRIMARY_GITHUB_TOKEN || _REBORN_LEGACY_GITHUB_TOKEN || '';
+const IS_TESTING = process.env.IS_TESTING === 'true';
+const REBORN_REPO_OWNER = "CMGCoderTobias";
+const REBORN_REPO_NAME = "RebornBroadcaster";
+
+function toTestingFeedUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (u.pathname.includes('/updates-testing/')) return u.toString();
+
+    const parts = u.pathname.split('/').filter(Boolean);
+    const idx = parts.indexOf('updates');
+    if (idx !== -1) parts[idx] = 'updates-testing';
+    u.pathname = '/' + parts.join('/');
+    return u.toString();
+  } catch (err) {
+    if (String(rawUrl).includes('/updates-testing/')) return rawUrl;
+    return String(rawUrl).replace('/updates/', '/updates-testing/');
+  }
+}
+
+function configureAutoUpdaterFeed() {
+  if (REBORN_UPDATE_FEED_URL) {
+    const feedUrl = IS_TESTING ? toTestingFeedUrl(REBORN_UPDATE_FEED_URL) : REBORN_UPDATE_FEED_URL;
+    console.log('Using backend update feed:', feedUrl);
+    autoUpdater.setFeedURL({ provider: "generic", url: feedUrl });
+    return;
+  }
+
+  // Only override to GitHub feed if we actually need prerelease support or a private token.
+  if (!IS_TESTING && !REBORN_GITHUB_TOKEN) return;
+
+  const githubConfig = {
+    provider: "github",
+    owner: REBORN_REPO_OWNER,
+    repo: REBORN_REPO_NAME,
+    prerelease: IS_TESTING,
+  };
+
+  if (REBORN_GITHUB_TOKEN) {
+    githubConfig.private = true;
+    githubConfig.token = REBORN_GITHUB_TOKEN;
+  }
+
+  console.log('Using GitHub updates.', IS_TESTING ? '(testing/prerelease allowed)' : '');
+  autoUpdater.setFeedURL(githubConfig);
+}
+
+function configureAutoUpdaterFeedGitHub() {
+  const githubConfig = {
+    provider: "github",
+    owner: REBORN_REPO_OWNER,
+    repo: REBORN_REPO_NAME,
+    prerelease: IS_TESTING,
+  };
+
+  if (REBORN_GITHUB_TOKEN) {
+    githubConfig.private = true;
+    githubConfig.token = REBORN_GITHUB_TOKEN;
+  }
+
+  console.log('Falling back to GitHub updates.', IS_TESTING ? '(testing/prerelease allowed)' : '');
+  autoUpdater.setFeedURL(githubConfig);
+  return true;
+}
 const isDev = !app.isPackaged; // Correctly detects if running in dev mode
 const ffmpegPath = isDev
   ? require('@ffmpeg-installer/ffmpeg').path
   : path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', '@ffmpeg-installer', 'win32-x64', 'ffmpeg.exe');
 
+function getPreloadPath() {
+    return app.isPackaged
+        ? path.join(process.resourcesPath, 'app.asar', 'preload.js')
+        : path.join(__dirname, 'preload.js');
+}
+
+function normalizeMountpoint(mountpoint) {
+    const raw = String(mountpoint ?? '').trim();
+    const cleaned = raw.replace(/^\/+/, '').replace(/\s+/g, '');
+    return cleaned ? `/${cleaned}` : '';
+}
+
+function toInt(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+    const parsed = parseInt(String(value ?? '').trim(), 10);
+    return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function sanitizeSettingsForApi(settings) {
+    const safe = { ...(settings || {}) };
+    if ('sourcepassword' in safe) {
+        safe.sourcepassword = safe.sourcepassword ? '***' : '';
+        safe.hasSourcePassword = !!(settings && settings.sourcepassword);
+    }
+    return safe;
+}
+
 
 
     function createDownloadingWindow() {
+        if (isHeadless) return;
         downloadingWindow = new BrowserWindow({
         width: 400,
         height: 200,
         frame: false,
         webPreferences: {
-            preload: path.join(__dirname, 'src', 'preload.js'),
+            preload: getPreloadPath(),
             contextIsolation: true,
             nodeIntegration: false,
         },
@@ -49,327 +148,92 @@ const ffmpegPath = isDev
   
   // Function to set up auto-updater with downloading and install handling
   function setupAutoUpdater() {
-    console.log('Setting up auto-updater...');
-    
-    autoUpdater.on('update-available', () => {
-      console.log('Update available. Downloading...');
-      createDownloadingWindow();  // Show downloading window when update starts
-    });
-    
-    autoUpdater.on('update-downloaded', () => {
-      console.log('Update downloaded. Installing...');
-      autoUpdater.quitAndInstall();  // Install the update and restart the app
-    });
-    
-    autoUpdater.on('error', (error) => {
-      console.error('Error in update process:', error);
-    });
-    
-    autoUpdater.on('update-not-available', () => {
-      console.log('No update available.');
-      initializeApp();  // Proceed with normal app initialization if no update is found
-    });
-  
-    // Check for updates after the app is ready
-    autoUpdater.checkForUpdatesAndNotify();
-  }
-  
-  
+  console.log('Setting up auto-updater...');
 
+  const hasBackendFeed = !!REBORN_UPDATE_FEED_URL;
+  let usedGithubFallback = false;
 
-let isHeadless = process.argv.includes('--headless'); // Headless mode flag
-let isApiConnected = false; // Track whether an API client is connected
+  configureAutoUpdaterFeed();
 
-const settingsFilePath = path.join(app.getPath('userData'), 'settings.json');
+  let startupDone = false;
+  let checkTimeout = null;
+  let downloadTimeout = null;
 
-let listenerInterval = null;
-let currentListenerCount = 0;
+  const safeInitialize = (reason) => {
+    if (startupDone) return;
+    startupDone = true;
 
-let mainWindow;
-let settingsWindow = null; // For managing the settings window
-let ffmpegProcess = null;  // Variable to store the active FFmpeg process
-let ffmpegRecordingProcess = null; // To track the recording FFmpeg process
-let isStreaming = false; // Global variable to track streaming state
-let isRecording = false;
+    if (checkTimeout) clearTimeout(checkTimeout);
+    if (downloadTimeout) clearTimeout(downloadTimeout);
 
-let streamTimer = 0;
-let recordingTimer = 0;
+    if (reason) console.log(`[updater] continuing startup (${reason})`);
+    initializeApp();
+  };
 
-let recordingTimerInterval = null; // Store the interval ID globally
-let streamTimerInterval = null; // Store the interval ID globally
+  const restartCheckTimeout = () => {
+    if (checkTimeout) clearTimeout(checkTimeout);
+    checkTimeout = setTimeout(() => {
+      if (tryGithubFallback('check-timeout')) return;
+      console.warn('[updater] check timeout; continuing startup');
+      safeInitialize('check-timeout');
+    }, 8000);
+  };
 
-const audioDevicesCache = []; // This will store the audio devices in memory
+  const tryGithubFallback = (reason) => {
+    if (!hasBackendFeed) return false;
+    if (usedGithubFallback) return false;
 
-global.streamActive = false;  // Tracks whether streaming is active
-global.recordingActive = false;  // Tracks whether recording is active
+    usedGithubFallback = true;
+    console.warn(`[updater] backend feed failed (${reason}); retrying via GitHub`);
 
+    const ok = configureAutoUpdaterFeedGitHub();
+    if (!ok) return false;
 
+    autoUpdater.checkForUpdates();
+    restartCheckTimeout();
+    return true;
+  };
 
-// Helper function to get the correct preload path based on whether the app is packaged or in dev mode
-const basePath = isDev ? __dirname : path.join(process.resourcesPath );
+  autoUpdater.on('update-available', () => {
+    console.log('Update available. Downloading...');
 
-
-const isSingleInstance = app.requestSingleInstanceLock();
-
-
-function switchMode(fromApi = false) {
-    if (isHeadless) {
-        // Switch to normal mode (renderer visible)
-        console.log('Switching to normal mode.');
-        isHeadless = false;
-
-        // Close any background processes (but don't interrupt streaming/recording)
-        if (mainWindow) {
-            mainWindow.show();  // Show the window
-        } else {
-            createWindow();  // Create the window if it's not created already
-        }
-
-        // Notify API that switch to normal mode was successful (optional)
-        if (fromApi) {
-            sendToApi('renderer-visible', { status: 'normal mode' });
-        }
-    } else {
-        // Switch to headless mode
-        console.log('Switching to headless mode.');
-        isHeadless = true;
-
-        if (mainWindow) {
-            mainWindow.hide();  // Hide the window (but don't destroy it)
-        }
-
-        // Notify API that switch to headless mode was successful (optional)
-        if (fromApi) {
-            sendToApi('renderer-hidden', { status: 'headless mode' });
-        }
+    if (checkTimeout) {
+      clearTimeout(checkTimeout);
+      checkTimeout = null;
     }
+
+    if (!isHeadless) createDownloadingWindow();
+
+    // If downloads hang forever, don't block the broadcaster.
+    downloadTimeout = setTimeout(() => {
+      console.warn('[updater] download timeout; continuing startup');
+      safeInitialize('download-timeout');
+    }, 5 * 60 * 1000);
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    console.log('Update downloaded. Installing...');
+    if (downloadTimeout) clearTimeout(downloadTimeout);
+    autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.on('error', (error) => {
+    console.error('Error in update process:', error?.message || error);
+    if (tryGithubFallback('error')) return;
+    safeInitialize('error');
+  });
+
+  autoUpdater.on('update-not-available', () => {
+    console.log('No update available.');
+    safeInitialize('no-update');
+  });
+
+  // Kick off update check (no notify in a broadcaster app)
+  autoUpdater.checkForUpdates();
+
+  // If the check hangs (offline, DNS, etc), continue startup.
+  restartCheckTimeout();
 }
-
-
-async function handleAppClose(sender, callType) {
-    const isApiConnected = tcpServer.getIsApiConnected();
-
-    switch (callType) {
-        case 'Total':
-            console.log(`[${sender}] initiating total shutdown...`);
-
-            if (isApiConnected) {
-                await sendToApi({ type: 'disconnect', reason: 'graceful' });
-            }
-
-            gracefulShutdown();
-            break;
-
-        case 'Partial':
-            if (sender === 'Api') {
-                if (!isHeadless && mainWindow) {
-                    console.log('[Api] Partial close: entering headless mode');
-                } else {
-                    console.log('[Api] Already headless, shutting down API connection');
-                }
-
-                if (isApiConnected) {
-                    await sendToApi({ type: 'disconnect', reason: 'graceful' });
-                    global.apiSocket?.end(() => {
-                        console.log('API socket disconnected.');
-                    });
-                }
-            } else if (sender === 'Renderer') {
-                if (isApiConnected) {
-                    console.log('[Renderer] Partial close: API connected, entering headless mode');
-                    mainWindow?.hide();
-                    isHeadless = true;
-                } else {
-                    console.log('[Renderer] Partial close: No API, quitting app');
-                    gracefulShutdown();
-                }
-            }
-            break;
-
-       case 'Warning':
-            if (sender === 'Api') {
-                // 1. Disconnect API first if connected
-                if (isApiConnected) {
-                    await sendToApi({ type: 'disconnect', reason: 'graceful' });
-                    global.apiSocket?.end(() => {
-                        console.log('API socket disconnected.');
-                    });
-                }
-
-                // 2. If window visible, ask user whether to close the app
-                if (!isHeadless && mainWindow) {
-                    console.log('[Api] Warning: prompting user to close app...');
-
-                    const { response } = await dialog.showMessageBox(mainWindow, {
-                        type: 'question',
-                        buttons: ['Yes, Close', 'No'],
-                        defaultId: 0,
-                        cancelId: 1,
-                        title: 'RebornBroadcaster',
-                        message: 'The API requested to close the app.',
-                        detail: 'Do you want to close RebornBroadcaster now?',
-                    });
-
-                    if (response === 0) {
-                        await handleAppClose('Api', 'Total');
-                    } else {
-                        console.log('[Api] User chose not to close app. API already disconnected.');
-                    }
-                } else {
-                    console.log('[Api] Headless or no window – closing app');
-                    gracefulShutdown();
-                }
-            } else if (sender === 'Renderer') {
-                if (isApiConnected && mainWindow) {
-                    console.log('[Renderer] Warning: prompting user before shutdown...');
-                    const { response } = await dialog.showMessageBox(mainWindow, {
-                        type: 'question',
-                        buttons: ['Close App', 'Minimize to Background'],
-                        defaultId: 0,
-                        cancelId: 1,
-                        title: 'RebornBroadcaster',
-                        message: 'Do you want to close RebornBroadcaster?',
-                        detail: 'Closing will stop all services. You can also minimize it to run in the background.',
-                    });
-
-                    if (response === 0) {
-                        await handleAppClose('Renderer', 'Total');
-                    } else {
-                        mainWindow?.hide();
-                        isHeadless = true;
-                    }
-                } else {
-                    console.log('[Renderer] Warning: no API connected, closing immediately');
-                    gracefulShutdown();
-                }
-            }
-            break;
-    }
-}
-
-
-
-
-// Function to create the main window
-function createWindow() {
-
-    // Set the preload path based on app packaging
-    const preloadPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'app.asar', 'preload.js')  // For packaged app
-      : path.join(__dirname, 'preload.js');  // For development mode
-  
-    if (!isHeadless) {
-      // If not headless, create the main window
-      if (!mainWindow) {  // Ensure we don't create another instance if the window already exists
-        mainWindow = new BrowserWindow({
-          width: 600,
-          height: 720,
-          maxWidth: 800,  // Maximum width the window can be resized to
-          frame: false,
-          webPreferences: {
-            nodeIntegration: false,
-            preload: preloadPath, // Preload the script based on the mode (development or packaged)
-          },
-        });
-  
-        mainWindow.loadFile('broadcaster.html'); // Load the main UI page
-  
-        // Add event listener for window closed (clean up)
-        mainWindow.on('closed', () => {
-          // Ensure that any settings window is also closed if it exists
-          if (settingsWindow && !settingsWindow.isDestroyed()) {
-            settingsWindow.close();
-            settingsWindow = null;
-          }
-          mainWindow = null;  // Cleanup mainWindow to free memory
-        });
-      }
-    } else {
-      console.log('Running in headless mode.');
-    }
-  }
-  
-
-
-
-
-// Function to send data to the external API via TCP
-function sendToApi(data) {
-    const socket = tcpServer.getApiSocket();
-
-    if (tcpServer.getIsApiConnected() && socket) {
-        socket.write(JSON.stringify(data) + '\n'); // Add newline to separate messages
-    } else {
-        console.error('❌ No API client is connected');
-    }
-}
-
-
-// Example of emitting a custom event from main to send data to the Python client
-ipcMain.on('send-to-api', (event, data) => {
-    sendToApi(data); // Call sendToApi with data
-});
-
-function startListenerCountPolling(settings) {
-    if (listenerInterval) return; // Already polling
-
-    const icecastUrl = `http://${settings.icecastHost}:${settings.icecastPort}/status-json.xsl`;
-
-    listenerInterval = setInterval(async () => {
-        try {
-            const response = await fetch(icecastUrl);
-            const data = await response.json();
-
-            const mount = settings.mountpoint || '/stream';
-
-            // Find the source mount based on the mountpoint
-            const source = Array.isArray(data.icestats.source)
-                ? data.icestats.source.find(src => src.listenurl.endsWith(mount))
-                : data.icestats.source;
-
-            // If the stream is live, update the listener count
-            if (isStreaming) {
-                if (source && source.listeners > 0) {
-                    currentListenerCount = source.listeners;
-                } else {
-                    currentListenerCount = 0; // No listeners but stream is live
-                }
-            } else {
-                currentListenerCount = 0; // Stream is offline
-            }
-
-            // Send the updated listener count to all renderer windows
-            BrowserWindow.getAllWindows().forEach(win => {
-                win.webContents.send('listener-count-updated', currentListenerCount);
-                console.log(currentListenerCount);
-            });
-
-            // Use the isStreaming flag to determine if the stream is live or offline
-            if (!isStreaming) {
-                // Stream is offline
-                BrowserWindow.getAllWindows().forEach(win => {
-                    win.webContents.send('stream-status-updated', 'Offline');
-                });
-            }
-
-        } catch (err) {
-            console.error('❌ Error polling listener count:', err);
-        }
-    }, 5000); // Every 5 seconds
-}
-
-function stopListenerCountPolling() {
-    if (listenerInterval) {
-        clearInterval(listenerInterval);
-        listenerInterval = null;
-
-        // Optionally notify that polling has stopped or reset stream to offline
-        BrowserWindow.getAllWindows().forEach(win => {
-            win.webContents.send('stream-status-updated', 'Offline');
-        });
-    }
-}
-
 
 // Function to start the stream and recording timer
 function startTimers() {
@@ -424,16 +288,21 @@ function broadcastTimers() {
     }
 
     // Optionally send to an API
-    if (tcpServer.isApiConnected) {
+    if (tcpServer.getIsApiConnected()) {
         sendToApi({
+            type: 'timers',
             streamTime: streamTimer,
             recordingTime: recordingTimer
         });
     }
 }
 
-
-function sendLog(message) {
+function sendLog(...parts) {
+    const message = parts
+        .filter(p => p !== undefined && p !== null)
+        .map(p => (typeof p === 'string' ? p : (p instanceof Error ? p.message : JSON.stringify(p))))
+        .join(' ')
+        .trim();
     const timestamp = new Date().toLocaleTimeString();
     const formatted = `[${timestamp}] ${message}`;
 
@@ -479,6 +348,28 @@ function openSettings() {
     });
 
     settingsWindow.loadFile('settings.html');  // Load the settings page
+}
+
+function openAbout() {
+    if (aboutWindow && !aboutWindow.isDestroyed()) {
+        aboutWindow.focus();
+        return;
+    }
+
+    aboutWindow = new BrowserWindow({
+        width: 700,
+        height: 720,
+        maxWidth: 900,
+        frame: false,
+        webPreferences: {
+            preload: getPreloadPath(),
+        },
+    });
+
+    aboutWindow.loadFile('about.html');
+    aboutWindow.on('closed', () => {
+        aboutWindow = null;
+    });
 }
 
 
@@ -540,8 +431,33 @@ async function startStream({ settings, event = null, respond = null }) {
         return;
     }
 
+    const mount = normalizeMountpoint(settings.mountpoint);
+    const icecastPort = toInt(settings.icecastPort);
+    const bitrate = toInt(settings.bitrate);
+
+    if (!mount) {
+        const msg = '❌ Invalid mountpoint';
+        if (event) event.reply('start-stream-response', { success: false, message: msg });
+        if (respond) respond({ success: false, message: msg });
+        return;
+    }
+
+    if (!Number.isFinite(icecastPort) || icecastPort < 1 || icecastPort > 65535) {
+        const msg = '❌ Invalid Icecast port (must be 1-65535)';
+        if (event) event.reply('start-stream-response', { success: false, message: msg });
+        if (respond) respond({ success: false, message: msg });
+        return;
+    }
+
+    if (!Number.isFinite(bitrate) || bitrate < 8) {
+        const msg = '❌ Invalid bitrate';
+        if (event) event.reply('start-stream-response', { success: false, message: msg });
+        if (respond) respond({ success: false, message: msg });
+        return;
+    }
+
     let codec, extension, format;
-    let audioOptions = [`-b:a`, `${settings.bitrate}k`];
+    let audioOptions = [`-b:a`, `${bitrate}k`];
 
     switch (settings.encodingType) {
         case 'mp3': codec = 'libmp3lame'; format = 'mp3'; extension = 'mp3'; break;
@@ -556,13 +472,31 @@ async function startStream({ settings, event = null, respond = null }) {
             return;
     }
 
+    const contentType = (format === 'mp3'
+        ? 'audio/mpeg'
+        : (format === 'adts'
+            ? 'audio/aac'
+            : (format === 'ogg'
+                ? 'audio/ogg'
+                : 'application/octet-stream')));
+
+    const urlOptions = new URLSearchParams();
+    if (settings.streamName) urlOptions.set('ice_name', String(settings.streamName));
+    if (settings.streamGenre) urlOptions.set('ice_genre', String(settings.streamGenre));
+    if (settings.streamDescription) urlOptions.set('ice_description', String(settings.streamDescription));
+    if (settings.streamUrl) urlOptions.set('ice_url', String(settings.streamUrl));
+    urlOptions.set('ice_public', String(settings.streamPublic ?? '0'));
+    if (contentType) urlOptions.set('content_type', contentType);
+
+    const outputUrl = `icecast://${settings.username}:${settings.sourcepassword}@${settings.icecastHost}:${icecastPort}${mount}${urlOptions.toString() ? `?${urlOptions}` : ''}`;
+
     const ffmpegArgs = [
         '-f', 'dshow',
         '-i', `audio=${settings.audioSourceName}`,
         '-acodec', codec,
         ...audioOptions,
         '-f', format,
-        `icecast://${settings.username}:${settings.sourcepassword}@${settings.icecastHost}:${settings.icecastPort}/${settings.mountpoint}`
+        outputUrl
     ];
 
     console.log("🚀 Starting FFmpeg with:\n", ffmpegArgs.join(' '));
@@ -570,6 +504,7 @@ async function startStream({ settings, event = null, respond = null }) {
     try {
         ffmpegProcess = spawn(`${ffmpegPath}`, ffmpegArgs);
         isStreaming = true;
+        startListenerCountPolling(settings);
 
         let streamStarted = false;
 
@@ -594,6 +529,9 @@ async function startStream({ settings, event = null, respond = null }) {
                 streamStarted = true;
                 global.streamActive = true;
                 startTimers();
+                if (tcpServer.getIsApiConnected()) {
+                    sendToApi({ type: 'stream-status', status: 'live' });
+                }
                 return;
             }
         
@@ -604,6 +542,7 @@ async function startStream({ settings, event = null, respond = null }) {
         
             // ✅ Catch-all for any message with "error" that hasn't been handled
             if (/error/i.test(msg)) {
+                lastFfmpegError = msg.trim().slice(0, 5000);
                 sendLog(`❌ Unhandled FFmpeg Error: ${msg.trim()}`);
             }
         
@@ -623,6 +562,9 @@ async function startStream({ settings, event = null, respond = null }) {
             sendLog('🔴 Stream Stopped');
 
             stopTimers();
+            if (tcpServer.getIsApiConnected()) {
+                sendToApi({ type: 'stream-status', status: 'stopped', code, signal });
+            }
         });
 
         ffmpegProcess.on('error', (err) => {
@@ -642,7 +584,7 @@ async function startStream({ settings, event = null, respond = null }) {
         console.error("❌ Error starting FFmpeg:", err);
         sendLog('❌ Stream Failed Error: ', err);
         isStreaming = false;
-        global.streamActive = true;
+        global.streamActive = false;
         ffmpegProcess = null;
         sendLog('❌ Stream Failed');
 
@@ -660,31 +602,25 @@ async function startRecording({ settings, event = null, respond = null }) {
         console.error("❌ Failed to load settings:", settings?.error || "Missing required values.");
         sendLog('❌ Recording Failed Error: ', settings?.error || "Missing required values.");
 
-        if (respond) {
-            respond('start-recording-response', 'Failed to load settings');
-        } else if (event) {
-            event.reply('start-recording-response', 'Failed to load settings');
-        }
+        const msg = settings?.error || 'Failed to load settings';
+        if (respond) respond({ success: false, message: msg });
+        if (event) event.reply('start-recording-response', { success: false, message: msg });
         return;
     }
 
     if (isRecording) {
         console.error('⚠️ Recording is already in progress');
-        if (respond) {
-            respond('start-recording-response', 'Recording is already running');
-        } else if (event) {
-            event.reply('start-recording-response', 'Recording is already running');
-        }
+        const msg = 'Recording is already running';
+        if (respond) respond({ success: false, message: msg });
+        if (event) event.reply('start-recording-response', { success: false, message: msg });
         return;
     }
 
     if (!fs.existsSync(settings.recordingPath)) {
         console.error('❌ No valid recording path specified');
-        if (respond) {
-            respond('start-recording-response', 'No valid recording path specified');
-        } else if (event) {
-            event.reply('start-recording-response', 'No valid recording path specified');
-        }
+        const msg = 'No valid recording path specified';
+        if (respond) respond({ success: false, message: msg });
+        if (event) event.reply('start-recording-response', { success: false, message: msg });
         return;
     }
 
@@ -699,10 +635,10 @@ async function startRecording({ settings, event = null, respond = null }) {
         case 'opus': codec = 'libopus'; format = 'ogg'; extension = 'opus'; audioOptions = ['-b:a', `${settings.bitrate}k`]; break;
         default:
             console.error('❌ Unsupported encoding type:', settings.encodingType);
-            if (respond) {
-                respond('start-recording-response', 'Unsupported encoding type');
-            } else if (event) {
-                event.reply('start-recording-response', 'Unsupported encoding type');
+            {
+                const msg = 'Unsupported encoding type';
+                if (respond) respond({ success: false, message: msg });
+                if (event) event.reply('start-recording-response', { success: false, message: msg });
             }
             return;
     }
@@ -716,11 +652,9 @@ async function startRecording({ settings, event = null, respond = null }) {
     if (fs.existsSync(filePath)) {
         console.error(`❌ File already exists: ${filePath}`);
         sendLog(`❌ File already exists: ${filePath}`);
-        if (respond) {
-            respond('start-recording-response', 'Recording stopped, file already exists');
-        } else if (event) {
-            event.reply('start-recording-response', 'Recording stopped, file already exists');
-        }
+        const msg = 'Recording stopped, file already exists';
+        if (respond) respond({ success: false, message: msg });
+        if (event) event.reply('start-recording-response', { success: false, message: msg });
         return;
     }
 
@@ -760,13 +694,16 @@ async function startRecording({ settings, event = null, respond = null }) {
             }
 
             if (!recordingStarted && msg.includes('Press [q] to stop')) {
-                isRecording = true
+                isRecording = true;
                 recordingStarted = true;
                 global.recordingActive = true;
                 console.log('\n✅ FFmpeg recording confirmed live!');
                 sendLog('✅ Recording started');
 
                 startTimers();
+                if (tcpServer.getIsApiConnected()) {
+                    sendToApi({ type: 'recording-status', status: 'live', filePath });
+                }
             }
         });
 
@@ -779,6 +716,9 @@ async function startRecording({ settings, event = null, respond = null }) {
             global.recordingActive = false;
             ffmpegRecordingProcess = null;
             stopTimers();
+            if (tcpServer.getIsApiConnected()) {
+                sendToApi({ type: 'recording-status', status: 'stopped', code, signal });
+            }
         });
 
         // Handle FFmpeg process error
@@ -791,12 +731,9 @@ async function startRecording({ settings, event = null, respond = null }) {
             ffmpegRecordingProcess = null;
         });
 
-        // Notify the renderer that recording started
-        if (respond) {
-            respond('start-recording-response', `Recording started: ${filePath}`);
-        } else if (event) {
-            event.reply('start-recording-response', `Recording started: ${filePath}`);
-        }
+        const msg = `Recording started: ${filePath}`;
+        if (respond) respond({ success: true, message: msg, filePath });
+        if (event) event.reply('start-recording-response', { success: true, message: msg, filePath });
 
     } catch (err) {
         console.error("❌ Error starting FFmpeg recording:", err);
@@ -804,11 +741,9 @@ async function startRecording({ settings, event = null, respond = null }) {
         ffmpegRecordingProcess = null;
         sendLog('❌ Recording Failed: ', err);
 
-        if (respond) {
-            respond('start-recording-response', 'Error starting recording');
-        } else if (event) {
-            event.reply('start-recording-response', 'Error starting recording');
-        }
+        const msg = err?.message || 'Error starting recording';
+        if (respond) respond({ success: false, message: msg });
+        if (event) event.reply('start-recording-response', { success: false, message: msg });
     }
 }
 
@@ -849,11 +784,14 @@ ipcMain.on('window-close', (event) => {
 ipcMain.on('start-stream', (event) => {
     console.log("🟢 Received start-stream request from renderer");
 
-    ipcMain.once('settings-loaded', (settings) => {
-        startStream({ settings, event });
-    });
+    const settings = readSettingsFromDisk() || {};
 
-    ipcMain.emit('load-for-use', event);
+    const hasReply = event && typeof event.reply === 'function';
+    const respond = hasReply
+        ? null
+        : (payload) => sendToApi({ type: 'start-stream-response', ...payload });
+
+    startStream({ settings, event: hasReply ? event : null, respond });
 });
 
 
@@ -862,13 +800,14 @@ ipcMain.on('start-stream', (event) => {
 ipcMain.on('start-recording', (event) => {
     console.log("🎙️ Start recording request received...");
 
-    // Listen for the settings to be loaded
-    ipcMain.once('settings-loaded', (settings) => {
-        startRecording({ settings, event });
-    });
+    const settings = readSettingsFromDisk() || {};
 
-    // Request the settings before starting the recording process
-    ipcMain.emit('load-for-use', event);
+    const hasReply = event && typeof event.reply === 'function';
+    const respond = hasReply
+        ? null
+        : (payload) => sendToApi({ type: 'start-recording-response', ...payload });
+
+    startRecording({ settings, event: hasReply ? event : null, respond });
 });
 
 
@@ -977,6 +916,9 @@ ipcMain.on('stop-recording', (event) => {
         if (event) {
             event.reply('stop-recording-response', 'No active recording to stop');
         }
+        if (tcpServer.getIsApiConnected()) {
+            sendToApi({ type: 'stop-recording-response', success: false, message: 'No active recording to stop' });
+        }
         return;
     }
 
@@ -987,7 +929,7 @@ ipcMain.on('stop-recording', (event) => {
 
     // Check if the application is in headless mode and if the API is connected
     if (isHeadless) {
-        if (isApiConnected) {
+        if (tcpServer.getIsApiConnected()) {
             sendToApi({ action: 'stop-recording' }); // Notify API of stop request
         }
     } else {
@@ -999,20 +941,30 @@ ipcMain.on('stop-recording', (event) => {
 
     // Listen for the process exit
     ffmpegRecordingProcess.on('exit', (code, signal) => {
+        const success = code === 0;
+        const message = success
+            ? 'Recording stopped successfully'
+            : `Recording failed to stop (code: ${code}, signal: ${signal})`;
+
         if (code === 0) {
             console.log(`Recording stopped gracefully with exit code: ${code}`);
             if (event) {
-                event.reply('stop-recording-response', 'Recording stopped successfully');
+                event.reply('stop-recording-response', message);
             }
         } else {
             console.error(`FFmpeg exited with code: ${code}, signal: ${signal}`);
             if (event) {
-                event.reply('stop-recording-response', 'Error stopping the recording');
+                event.reply('stop-recording-response', message);
             }
         }
 
         ffmpegRecordingProcess = null; // Clear the process reference
         isRecording = false; // Reset the recording state
+        global.recordingActive = false;
+        if (tcpServer.getIsApiConnected()) {
+            sendToApi({ type: 'recording-status', status: 'stopped', code, signal });
+            sendToApi({ type: 'stop-recording-response', success, message, code, signal });
+        }
     });
 
     // Optional timeout in case FFmpeg hangs and doesn't exit (can be adjusted as necessary)
@@ -1023,6 +975,9 @@ ipcMain.on('stop-recording', (event) => {
             isRecording = false;
             if (event) {
                 event.reply('stop-recording-response', 'Recording stop timed out, process killed');
+            }
+            if (tcpServer.getIsApiConnected()) {
+                sendToApi({ type: 'stop-recording-response', success: false, message: 'Recording stop timed out, process killed' });
             }
         }
     }, 10000); // Wait for 10 seconds before forcefully killing the process
@@ -1036,12 +991,12 @@ ipcMain.on('stop-stream', (event) => {
     if (!isStreaming) {
         console.error('No active stream to stop');
 
-        if (event) {
-            event.reply('stop-streaming-response', 'No active stream to stop');
+        if (event && typeof event.reply === 'function') {
+            event.reply('stop-stream-response', 'No active stream to stop');
         }
 
-        if (isApiConnected) {
-            sendToApi({ action: 'stop-stream-failed', message: 'No active stream to stop' });
+        if (tcpServer.getIsApiConnected()) {
+            sendToApi({ type: 'stop-stream-response', success: false, message: 'No active stream to stop' });
         }
 
         return;
@@ -1056,15 +1011,16 @@ ipcMain.on('stop-stream', (event) => {
             ? 'Streaming stopped successfully'
             : `Streaming failed to stop (code: ${code}, signal: ${signal})`;
 
-        if (event) {
-            event.reply('stop-streaming-response', message);
+        if (event && typeof event.reply === 'function') {
+            event.reply('stop-stream-response', message);
         }
 
-        if (isApiConnected) {
+        if (tcpServer.getIsApiConnected()) {
             sendToApi({
                 action: success ? 'stop-stream-success' : 'stop-stream-error',
                 message,
             });
+            sendToApi({ type: 'stop-stream-response', success, message, code, signal });
         }
 
         if (!isHeadless && mainWindow) {
@@ -1073,6 +1029,11 @@ ipcMain.on('stop-stream', (event) => {
 
         ffmpegProcess = null;
         isStreaming = false;
+        global.streamActive = false;
+
+        if (tcpServer.getIsApiConnected()) {
+            sendToApi({ type: 'stream-status', status: 'stopped' });
+        }
     });
 
 
@@ -1082,7 +1043,12 @@ ipcMain.on('stop-stream', (event) => {
             console.warn('Streaming stop timed out, forcing process termination');
             ffmpegProcess.kill(); // Forcefully kill the process if it takes too long
             isStreaming = false;
-            event.reply('stop-streaming-response', 'Streaming stop timed out, process killed');
+            if (event && typeof event.reply === 'function') {
+                event.reply('stop-stream-response', 'Streaming stop timed out, process killed');
+            }
+            if (tcpServer.getIsApiConnected()) {
+                sendToApi({ type: 'stop-stream-response', success: false, message: 'Streaming stop timed out, process killed' });
+            }
         }
     }, 10000); // Wait for 10 seconds before forcefully killing the process
 });
@@ -1149,8 +1115,8 @@ ipcMain.handle('open-config-file-dialog', async () => {
       mainWindow.webContents.send('load-settings', mergedSettings);
     }
 
-    if (isApiConnected) {
-      ipcMain.emit('send-settings-to-api', mergedSettings);
+    if (tcpServer.getIsApiConnected()) {
+      sendSettingsToApi(mergedSettings);
     }
 
     return selectedFile;
@@ -1187,11 +1153,213 @@ ipcMain.handle('open-save-folder-dialog', async () => {
   }
 });
 
+ipcMain.handle('export-config', async (event, { includeSecrets } = {}) => {
+    const result = await dialog.showSaveDialog({
+        title: 'Export Config File',
+        defaultPath: path.join(app.getPath('documents'), 'stream-settings.json'),
+        filters: [
+            { name: 'JSON Files', extensions: ['json'] },
+            { name: 'All Files', extensions: ['*'] }
+        ]
+    });
+
+    if (result.canceled || !result.filePath) {
+        return { canceled: true };
+    }
+
+    const settings = readSettingsFromDisk() || {};
+    const toWrite = includeSecrets ? settings : stripSecretsForExport(settings);
+    fs.writeFileSync(result.filePath, JSON.stringify(toWrite, null, 2), 'utf-8');
+
+    return { filePath: result.filePath };
+});
+
+ipcMain.handle('get-state', async () => {
+    return buildStateSnapshot();
+});
+
 
 
 
 ipcMain.on('open-settings-window', () => {
     openSettings(); // Open the settings window when requested
+});
+
+ipcMain.on('open-about-window', () => {
+    openAbout();
+});
+
+ipcMain.handle('get-app-info', async () => {
+    return {
+        productName: app.getName(),
+        version: app.getVersion(),
+    };
+});
+
+ipcMain.handle('get-third-party-notices', async () => {
+    try {
+        const noticesPath = path.join(__dirname, 'THIRD_PARTY_NOTICES.txt');
+        return fs.readFileSync(noticesPath, 'utf8');
+    } catch (err) {
+        console.error('Failed to load THIRD_PARTY_NOTICES.txt:', err);
+        return '';
+    }
+});
+
+ipcMain.handle('icecast-test', async (event, { icecastHost, icecastPort, mountpoint }) => {
+    const host = String(icecastHost || '').trim();
+    const port = toInt(icecastPort);
+    const mount = normalizeMountpoint(mountpoint) || '/stream';
+
+    if (!host || !Number.isFinite(port)) {
+        return { ok: false, message: 'Missing host or port' };
+    }
+
+    const url = `http://${host}:${port}/status-json.xsl`;
+
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            const result = { ok: false, message: `HTTP ${response.status} ${response.statusText}` };
+            lastIcecastStatusTest = { at: Date.now(), input: { host, port, mount }, result };
+            return result;
+        }
+
+        const data = await response.json();
+        const sources = data?.icestats?.source;
+        const list = Array.isArray(sources) ? sources : (sources ? [sources] : []);
+
+        const mounts = list.map(src => {
+            const listenurl = String(src?.listenurl || '');
+            const srcMount = String(src?.mount || (listenurl ? new URL(listenurl).pathname : '') || '').trim();
+            const listeners = typeof src?.listeners === 'number' ? src.listeners : 0;
+            return { mount: srcMount || listenurl, listenurl, listeners };
+        });
+
+        const source = mounts.find(m => String(m.listenurl || '').endsWith(mount) || String(m.mount || '') === mount);
+        const mountFound = !!source;
+        const listeners = source ? source.listeners : 0;
+
+        const result = { ok: true, mount: mount, mountFound, listeners, mounts };
+        lastIcecastStatusTest = { at: Date.now(), input: { host, port, mount }, result: { ok: result.ok, mount: result.mount, mountFound: result.mountFound, listeners: result.listeners } };
+        return result;
+    } catch (err) {
+        const result = { ok: false, message: err?.message || String(err) };
+        lastIcecastStatusTest = { at: Date.now(), input: { host, port, mount }, result };
+        return result;
+    }
+});
+
+ipcMain.handle('icecast-test-listen-url', async (event, { icecastHost, icecastPort, mountpoint }) => {
+    const host = String(icecastHost || '').trim();
+    const port = toInt(icecastPort);
+    const mount = normalizeMountpoint(mountpoint);
+
+    if (!host || !Number.isFinite(port)) {
+        return { ok: false, message: 'Missing host or port' };
+    }
+    if (!mount) {
+        return { ok: false, message: 'Missing mountpoint' };
+    }
+
+    const url = `http://${host}:${port}${mount}`;
+
+    const tryFetch = async (method, extraHeaders = {}) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4000);
+        try {
+            const response = await fetch(url, {
+                method,
+                headers: {
+                    'User-Agent': 'RebornBroadcaster/icecast-test',
+                    ...extraHeaders,
+                },
+                signal: controller.signal,
+            });
+            const contentType = response.headers.get('content-type') || '';
+            return { ok: true, status: response.status, statusText: response.statusText, contentType };
+        } finally {
+            clearTimeout(timeout);
+        }
+    };
+
+    try {
+        // Prefer HEAD to avoid downloading audio.
+        const head = await tryFetch('HEAD');
+        const result = { ok: true, url, status: head.status, contentType: head.contentType };
+        lastListenUrlTest = { at: Date.now(), input: { host, port, mount }, result };
+        return result;
+    } catch (_) {
+        try {
+            // Fallback: small GET request attempt. Some servers don't support HEAD for streams.
+            const get = await tryFetch('GET', { Range: 'bytes=0-0' });
+            const result = { ok: true, url, status: get.status, contentType: get.contentType };
+            lastListenUrlTest = { at: Date.now(), input: { host, port, mount }, result };
+            return result;
+        } catch (err) {
+            const result = { ok: false, message: err?.message || String(err), url };
+            lastListenUrlTest = { at: Date.now(), input: { host, port, mount }, result };
+            return result;
+        }
+    }
+});
+
+ipcMain.handle('icecast-update-now-playing', async (event, { icecastHost, icecastPort, mountpoint, nowPlaying: newNowPlaying }) => {
+    const host = String(icecastHost || '').trim();
+    const port = toInt(icecastPort);
+    const mount = normalizeMountpoint(mountpoint);
+    const song = String(newNowPlaying || '').trim();
+
+    if (!host || !Number.isFinite(port)) {
+        return { ok: false, message: 'Missing host or port' };
+    }
+    if (!mount) {
+        return { ok: false, message: 'Missing mountpoint' };
+    }
+    if (!song) {
+        return { ok: false, message: 'Missing Now Playing text' };
+    }
+
+    const url = `http://${host}:${port}/admin/metadata?mode=updinfo&mount=${encodeURIComponent(mount)}&song=${encodeURIComponent(song)}`;
+
+    try {
+        const saved = readSettingsFromDisk() || {};
+        const user = String(saved.username || '').trim();
+        const pass = String(saved.sourcepassword || '').trim();
+        if (!user || !pass) {
+            return { ok: false, message: 'Missing source credentials (username/sourcepassword)' };
+        }
+
+        const auth = Buffer.from(`${user}:${pass}`, 'utf8').toString('base64');
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { Authorization: `Basic ${auth}` },
+        });
+
+        if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            return { ok: false, message: `HTTP ${response.status} ${response.statusText}${text ? `: ${text.slice(0, 200)}` : ''}` };
+        }
+
+        nowPlaying = song;
+        sendLog('Now Playing updated:', song);
+        if (tcpServer.getIsApiConnected()) {
+            sendToApi({ type: 'now-playing', text: song });
+        }
+        try {
+            const next = { ...(saved || {}), nowPlaying: song };
+            fs.writeFileSync(settingsFilePath, JSON.stringify(next, null, 2), 'utf-8');
+            if (!isHeadless && mainWindow) {
+                mainWindow.webContents.send('load-settings', next);
+            }
+            sendSettingsToApi(next);
+        } catch (e) {
+            console.warn('Failed to persist nowPlaying:', e?.message || e);
+        }
+        return { ok: true };
+    } catch (err) {
+        return { ok: false, message: err?.message || String(err) };
+    }
 });
 
 
@@ -1270,11 +1438,17 @@ ipcMain.on('save-settings', (event, settings, fromApi = false) => {
         sourcepassword: settings.sourcepassword || '',
         icecastHost: settings.icecastHost || '',
         icecastPort: settings.icecastPort || '',
+        streamName: settings.streamName || '',
+        streamGenre: settings.streamGenre || '',
+        streamDescription: settings.streamDescription || '',
+        streamUrl: settings.streamUrl || '',
+        streamPublic: settings.streamPublic ?? '0',
         encodingType: settings.encodingType || '',
         audioSourceId: settings.audioSourceId || '', // Store ID
         audioSourceName: settings.audioSourceName || '', // Store Name
         bitrate: settings.bitrate || 128, // Default bitrate (e.g., 128kbps)
         recordingPath: settings.recordingPath || '',
+        nowPlaying: settings.nowPlaying || '',
     };
 
     // Write the settings to settings.json file
@@ -1291,8 +1465,8 @@ ipcMain.on('save-settings', (event, settings, fromApi = false) => {
         }
 
         // After saving, ensure API gets updated as well (if connected)
-        if (isApiConnected) {
-            ipcMain.emit('send-settings-to-api', settingsToSave);
+        if (tcpServer.getIsApiConnected()) {
+            sendSettingsToApi(settingsToSave);
         }
 
     } catch (err) {
@@ -1316,8 +1490,8 @@ ipcMain.on('load-settings', (event) => {
         }
 
         // If the request is from the API, send the settings to the API if connected
-        if (isApiConnected) {
-            ipcMain.emit('send-settings-to-api', settings);  // Notify API to load settings
+        if (tcpServer.getIsApiConnected()) {
+            sendSettingsToApi(settings);  // Notify API to load settings
         }
 
         // Reply to the renderer with the settings
@@ -1389,6 +1563,47 @@ ipcMain.on('api-save-settings', (event, jsonString) => {
     }
 });
 
+ipcMain.on('api-export-config', (event, { filePath, includeSecrets, id } = {}) => {
+    try {
+        if (!filePath) {
+            sendToApi({ type: 'export-config-response', ok: false, message: 'Missing filePath', id });
+            return;
+        }
+
+        const settings = readSettingsFromDisk() || {};
+        const toWrite = includeSecrets ? settings : stripSecretsForExport(settings);
+        fs.writeFileSync(filePath, JSON.stringify(toWrite, null, 2), 'utf-8');
+        sendToApi({ type: 'export-config-response', ok: true, filePath, id });
+    } catch (err) {
+        sendToApi({ type: 'export-config-response', ok: false, message: err?.message || String(err), id });
+    }
+});
+
+ipcMain.on('api-import-config', (event, { filePath, merge = true, id } = {}) => {
+    try {
+        if (!filePath) {
+            sendToApi({ type: 'import-config-response', ok: false, message: 'Missing filePath', id });
+            return;
+        }
+
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const incoming = JSON.parse(content);
+        const current = readSettingsFromDisk() || {};
+        const next = merge ? { ...current, ...incoming } : incoming;
+
+        fs.writeFileSync(settingsFilePath, JSON.stringify(next, null, 2), 'utf-8');
+
+        if (!isHeadless && mainWindow) {
+            mainWindow.webContents.send('load-settings', next);
+        }
+        sendSettingsToApi(next);
+
+        sendToApi({ type: 'import-config-response', ok: true, filePath, id });
+    } catch (err) {
+        sendToApi({ type: 'import-config-response', ok: false, message: err?.message || String(err), id });
+    }
+});
+
 ipcMain.on('request-app-close', (event, { sender, callType }) => {
     handleAppClose(sender, callType);
 });
@@ -1428,20 +1643,22 @@ ipcMain.on('open-renderer', () => {
 
 app.whenReady().then(() => {
     console.log("App is ready.");
-    
-    if (!isDev) {
-      console.log("Checking for updates...");
-      setupAutoUpdater();  // Set up auto-updater if not in dev mode
-    } else {
-      console.log("Development mode, skipping update check...");
-      initializeApp();  // Skip update check in dev mode and proceed with normal initialization
+
+    if (isDev) {
+      console.log("Development mode � skipping update check...");
+      initializeApp();
+      return;
     }
+
+    if (isHeadless) {
+      console.log("Headless mode � skipping update check...");
+      initializeApp();
+      return;
+    }
+
+    console.log("Checking for updates...");
+    setupAutoUpdater();
   });
-  
-
-
-
-
 
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin' && !isHeadless) { // Not on macOS and not in headless mode

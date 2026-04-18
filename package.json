@@ -1,6 +1,6 @@
 {
   "name": "rebornbroadcaster",
-  "version": "0.0.7",
+  "version": "0.0.9",
   "main": "main.js",
   "description": "A powerful broadcaster app for media professionals.",
   "author": "ConliffeMediaGroup",
@@ -30,14 +30,21 @@
     "directories": {
       "output": "dist"
     },
+    "compression": "maximum",
     "files": [
-      "**/*"
+      "**/*",
+      "!dist/**",
+      "!.git/**",
+      "!node_modules/**/{test,tests,__tests__}/**",
+      "!node_modules/**/{docs,doc,example,examples}/**",
+      "!node_modules/**/.bin/**",
+      "!**/*.map",
+      "!**/*.ts",
+      "!**/*.tsx",
+      "!**/*.md"
     ],
-    "extraResources": [
-      {
-        "from": "node_modules/@ffmpeg-installer/ffmpeg",
-        "to": "ffmpeg"
-      }
+    "asarUnpack": [
+      "node_modules/@ffmpeg-installer/win32-x64/ffmpeg.exe"
     ],
     "win": {
       "target": "nsis",

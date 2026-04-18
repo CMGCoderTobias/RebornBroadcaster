@@ -89,7 +89,7 @@ html, body {
     word-wrap: break-word;
 
     user-select: text;
-    pointer-events: none;
+    pointer-events: auto;
     box-sizing: border-box;
 }
 
@@ -104,6 +104,55 @@ html, body {
     margin: 0 auto;
     border-radius: 8px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.settings-layout {
+    display: flex;
+    gap: 16px;
+    align-items: stretch;
+    width: 100%;
+}
+
+.settings-sidebar {
+    width: 160px;
+    flex: 0 0 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-tab {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(0, 0, 0, 0.25);
+    color: #fff;
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.settings-tab.active {
+    background: rgba(30, 136, 229, 0.35);
+    border-color: rgba(30, 136, 229, 0.8);
+}
+
+.settings-main {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.settings-panel {
+    display: none;
+    margin-bottom: 12px;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.18);
+}
+
+.settings-panel.active {
+    display: block;
 }
 
 h2 {

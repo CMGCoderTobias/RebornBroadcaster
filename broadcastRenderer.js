@@ -6,8 +6,17 @@ let currentSettings = {};
 window.electron.loadSettings().then((settings) => {
     currentSettings = settings;
     console.log('✅ Loaded settings:', currentSettings);
+    logToUI('✅ Settings loaded');
 }).catch((err) => {
     console.error('❌ Error loading settings:', err);
+    logToUI(`❌ Error loading settings: ${err?.message || err}`);
+});
+
+// Keep settings in sync when main pushes updates
+window.electron.on('load-settings', (event, settings) => {
+    currentSettings = settings || {};
+    console.log('✅ Settings updated:', currentSettings);
+    logToUI('✅ Settings updated');
 });
 
 // Timer updates from main
@@ -36,20 +45,19 @@ document.getElementById('startStreamButton').addEventListener('click', () => {
         const missing = required.filter(f => !currentSettings?.[f]);
 
         if (missing.length) {
-            console.error(`❌ Missing stream settings: ${missing.join(', ')}`);
+            const msg = `❌ Missing stream settings: ${missing.join(', ')}`;
+            console.error(msg);
+            logToUI(msg);
             return;
         }
 
+        logToUI('🟢 Starting stream…');
         console.log("🟢 Starting stream with:", currentSettings);
-        window.electron.startStream(
-            currentSettings.mountpoint,
-            currentSettings.sourcepassword,
-            currentSettings.bitrate,
-            currentSettings.audioSourceId,
-            currentSettings.encodingType
-        ).then((response) => {
+        window.electron.startStream().then((response) => {
+            logToUI(`✅ Stream started: ${response?.message || 'OK'}`);
             console.log("📬 Stream started:", response);
         }).catch((err) => {
+            logToUI(`❌ Stream failed: ${err?.message || err}`);
             console.error('⚠️ Failed to start stream:', err);
         });
     }
@@ -66,20 +74,19 @@ document.getElementById('startRecordingButton').addEventListener('click', () => 
         const missing = required.filter(f => !currentSettings?.[f]);
 
         if (missing.length) {
-            console.error(`❌ Missing recording settings: ${missing.join(', ')}`);
+            const msg = `❌ Missing recording settings: ${missing.join(', ')}`;
+            console.error(msg);
+            logToUI(msg);
             return;
         }
 
+        logToUI('🎙️ Starting recording…');
         console.log("🎙️ Starting recording with:", currentSettings);
-        window.electron.startRecording(
-            currentSettings.bitrate,
-            currentSettings.audioSourceId,
-            currentSettings.audioSourceName,
-            currentSettings.encodingType,
-            currentSettings.recordingPath
-        ).then((response) => {
+        window.electron.startRecording().then((response) => {
+            logToUI(`✅ Recording started: ${response?.message || 'OK'}`);
             console.log("📬 Recording started:", response);
         }).catch((err) => {
+            logToUI(`❌ Recording failed: ${err?.message || err}`);
             console.error('⚠️ Failed to start recording:', err);
         });
     }
@@ -87,20 +94,39 @@ document.getElementById('startRecordingButton').addEventListener('click', () => 
 
 // Stop Stream / Recording
 function stopStream() {
+    logToUI('🛑 Stopping stream…');
     window.electron.stopStream()
-        .then((res) => console.log("🛑 Stream stopped:", res))
-        .catch((err) => console.error("❌ Error stopping stream:", err));
+        .then((res) => {
+            logToUI(`✅ Stream stopped: ${res?.message || res || 'OK'}`);
+            console.log("🛑 Stream stopped:", res);
+        })
+        .catch((err) => {
+            logToUI(`❌ Stop stream failed: ${err?.message || err}`);
+            console.error("❌ Error stopping stream:", err);
+        });
 }
 
 function stopRecording() {
+    logToUI('🛑 Stopping recording…');
     window.electron.stopRecording()
-        .then((res) => console.log("🛑 Recording stopped:", res))
-        .catch((err) => console.error("❌ Error stopping recording:", err));
+        .then((res) => {
+            logToUI(`✅ Recording stopped: ${res?.message || res || 'OK'}`);
+            console.log("🛑 Recording stopped:", res);
+        })
+        .catch((err) => {
+            logToUI(`❌ Stop recording failed: ${err?.message || err}`);
+            console.error("❌ Error stopping recording:", err);
+        });
 }
 
 // Open settings window
 document.getElementById('settingsButton').addEventListener('click', () => {
     window.electron.openSettings();
+});
+
+// Open about window
+document.getElementById('aboutButton')?.addEventListener('click', () => {
+    window.electron.openAbout();
 });
 
 function updateStatus() {
@@ -156,8 +182,8 @@ function logToUI(message) {
     logBox.scrollTop = logBox.scrollHeight; // auto-scroll to bottom
 }
 
-if (window.electron?.logMessage) {
-    window.electron.logMessage((msg) => {
+if (window.electron?.onLogMessage) {
+    window.electron.onLogMessage((msg) => {
         logToUI(msg);
     });
 }
@@ -170,7 +196,10 @@ window.electron.onListenerCountUpdate((count) => {
 // Listen for stream status update
 window.electron.onStreamStatusUpdate((status) => {
     const el = document.getElementById('listenerCountDisplay');
-    if (el) el.textContent = status; // Show "Offline" or listener count
+    if (!el) return;
+    if (status === 'Offline') {
+        el.textContent = 'Offline';
+    }
 });
 
 
