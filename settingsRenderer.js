@@ -33,6 +33,14 @@ window.addEventListener('DOMContentLoaded', () => {
         const configResult = document.getElementById('configResult');
         const statusSnapshot = document.getElementById('statusSnapshot');
         const refreshStatusButton = document.getElementById('refreshStatusButton');
+        const obsInstallStatus = document.getElementById('obsInstallStatus');
+        const icecastEnabledCheckbox = document.getElementById('icecastEnabled');
+        const obsEnabledCheckbox = document.getElementById('obsEnabled');
+        const obsHostInput = document.getElementById('obsHost');
+        const obsPortInput = document.getElementById('obsPort');
+        const obsPasswordInput = document.getElementById('obsPassword');
+        const testObsButton = document.getElementById('testObsButton');
+        const obsTestResult = document.getElementById('obsTestResult');
 
         let cachedDevices = []; // Store devices to compare later
 
@@ -184,7 +192,12 @@ window.addEventListener('DOMContentLoaded', () => {
                 audioSourceName: selectedDeviceName || '',
                 bitrate: parseInt(bitrateInput.value),
                 recordingPath: pathInput.value.trim(),
-                nowPlaying: nowPlayingInput?.value?.trim() || ''
+                nowPlaying: nowPlayingInput?.value?.trim() || '',
+                icecastEnabled: !!icecastEnabledCheckbox?.checked,
+                obsEnabled: !!obsEnabledCheckbox?.checked,
+                obsHost: obsHostInput?.value?.trim() || '127.0.0.1',
+                obsPort: obsPortInput?.value?.trim() || '4455',
+                obsPassword: obsPasswordInput?.value || ''
             };
 
             try {
@@ -310,12 +323,25 @@ window.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        testObsButton?.addEventListener('click', async () => {
+            if (obsTestResult) obsTestResult.textContent = 'Testing...';
+            try {
+                const result = await window.electron.testObs({
+                    obsHost: obsHostInput?.value?.trim(),
+                    obsPort: obsPortInput?.value?.trim(),
+                    obsPassword: obsPasswordInput?.value || ''
+                });
+                if (obsTestResult) {
+                    obsTestResult.textContent = result?.ok
+                        ? `OK: OBS ${result.version} websocket=${result.websocket} rpc=${result.rpc}`
+                        : `FAIL: ${result?.message || 'Unknown error'}`;
+                }
+            } catch (error) {
+                if (obsTestResult) obsTestResult.textContent = `FAIL: ${error?.message || error}`;
+            }
+        });
+
     } catch (error) {
         console.error('❌ Error in DOMContentLoaded listener:', error);
     }
-
-    
-
-
-
 });

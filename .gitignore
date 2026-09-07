@@ -7,6 +7,18 @@ node_modules/
 # Build output
 dist/
 build/
+native/.venv/
+native/.build-venv/
+native/**/*.pyc
+native/**/__pycache__/
+native/build/
+native/*.spec
+release-staging/
+release-output/
+updater-runtime/
+legacy-electron/*.exe
+legacy-electron/*.blockmap
+native/deployment/
 
 # OS specific files
 .DS_Store

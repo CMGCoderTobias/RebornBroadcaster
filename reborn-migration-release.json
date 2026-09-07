@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "repository": "CMGCoderTobias/RebornBroadcaster",
+  "appId": "rebornbroadcaster",
+  "versionSource": {
+    "type": "json",
+    "path": ".\\package.json",
+    "property": "version"
+  },
+  "channel": "stable",
+  "updaterBaseUrl": "https://kosradio.com/security",
+  "privateKey": "..\\..\\RebornUpdateAgent\\private-keys\\release-private.pem",
+  "outputDirectory": ".\\release-output\\migration-{version}",
+  "releaseNotes": "Installs the shared Reborn Update Agent while retaining the existing Electron updater as a migration fallback.",
+  "extraAssets": [
+    ".\\dist\\RebornBroadcaster-Setup-{version}.exe",
+    ".\\dist\\RebornBroadcaster-Setup-{version}.exe.blockmap",
+    ".\\dist\\latest.yml"
+  ],
+  "packages": [
+    {
+      "rid": "win-x64",
+      "sourceDirectory": ".\\dist\\win-unpacked",
+      "entryExecutable": "RebornBroadcaster.exe",
+      "build": {
+        "command": "powershell",
+        "arguments": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ".\\scripts\\build-electron-migration.ps1", "-Version", "{version}"],
+        "workingDirectory": "."
+      }
+    }
+  ]
+}

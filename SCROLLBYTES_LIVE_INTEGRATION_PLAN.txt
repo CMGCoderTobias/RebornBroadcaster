@@ -1,0 +1,47 @@
+RebornBroadcaster -> ScrollBytes Live (Plan)
+Date: 2026-05-27
+
+Goal
+One "Go Live" action can start:
+1) Audio-only stream to Icecast (BUTT replacement behavior)
+2) Video+audio live stream to ScrollBytes (AWS IVS) by controlling OBS externally
+
+Key decisions
+- RebornBroadcaster remains a lightweight audio streamer (not a mixer, not a full OBS replacement).
+- OBS handles all video production (scenes, camera, overlays, encoding).
+- RebornBroadcaster controls OBS via obs-websocket (start/stop stream + start/stop recording).
+- Audio to Icecast is sent by RebornBroadcaster via FFmpeg from one selected audio device/source.
+- Audio for OBS/IVS is handled in OBS (user chooses the same or different audio device as desired).
+
+User workflow (v1)
+1) In ScrollBytes Creator Studio -> Live tab:
+   - Create stream for a channel
+   - Copy IVS RTMPS server URL + stream key (or later: RebornBroadcaster fetches it via API login)
+2) In OBS:
+   - Set Service = Custom
+   - Server = IVS RTMPS URL
+   - Stream Key = IVS key
+   - Set audio source(s) in OBS
+3) In RebornBroadcaster:
+   - Configure Icecast settings + pick audio input device
+   - Enable toggles:
+     - "Stream to Radio (Icecast)"
+     - "Stream to ScrollBytes (OBS/IVS)"
+   - Press Go Live
+
+Planned modules (code structure)
+- engines/
+  - audioEngineFfmpegIcecast (existing approach)
+  - videoEngineObsWebsocket (new)
+- adapters/
+  - obsWebsocketClient (connect, auth, health, start/stop stream, record)
+- settings/
+  - output toggles (icecastEnabled, obsEnabled)
+  - obs connection info (host/port/password)
+  - ivs ingest info (serverUrl/streamKey) stored locally or fetched from ScrollBytes
+
+Future upgrades (not v1)
+- "Simple Video" mode without OBS using FFmpeg only (single camera + mic).
+- Self-host live provider alongside IVS (ScrollBytes backend already designed for provider='ivs'|'selfhost').
+- Auto-fetch IVS stream info from ScrollBytes via a secure login token (no copy/paste).
+

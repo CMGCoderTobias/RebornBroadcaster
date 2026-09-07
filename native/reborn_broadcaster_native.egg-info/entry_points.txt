@@ -1,0 +1,3 @@
+[console_scripts]
+reborn-broadcaster = reborn_broadcaster.app:main
+reborn-broadcaster-core = reborn_broadcaster.core_main:main

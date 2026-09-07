@@ -1,13 +1,16 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const { exec, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const tcpServer = require('./tcpServer'); // Make sure this path is correct
+const { startIcecastAudioStream } = require('./engines/audioEngineIcecast');
+const { ObsWebsocketClient } = require('./adapters/obsWebsocketClient');
 const iconv = require('iconv-lite');
 const { listenerCount } = require('process');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const { autoUpdater } = require('electron-updater');
+const { bootstrapAndDoctor, launchStagedApp, reportHealthFromEnvironment } = require('./updaterClient');
 const REBORN_UPDATE_FEED_URL = process.env.REBORN_UPDATE_FEED_URL || '';
 const _REBORN_PRIMARY_GITHUB_TOKEN = process.env.REBORN_GITHUB_TOKEN || '';
 const _REBORN_LEGACY_GITHUB_TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || '';
@@ -18,6 +21,7 @@ const REBORN_GITHUB_TOKEN = _REBORN_PRIMARY_GITHUB_TOKEN || _REBORN_LEGACY_GITHU
 const IS_TESTING = process.env.IS_TESTING === 'true';
 const REBORN_REPO_OWNER = "CMGCoderTobias";
 const REBORN_REPO_NAME = "RebornBroadcaster";
+let appInitialized = false;
 
 function toTestingFeedUrl(rawUrl) {
   try {
@@ -81,13 +85,19 @@ function configureAutoUpdaterFeedGitHub() {
 }
 const isDev = !app.isPackaged; // Correctly detects if running in dev mode
 const ffmpegPath = isDev
-  ? require('@ffmpeg-installer/ffmpeg').path
-  : path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', '@ffmpeg-installer', 'win32-x64', 'ffmpeg.exe');
+  ? require('ffmpeg-static')
+  : path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'ffmpeg-static', 'ffmpeg.exe');
 
 function getPreloadPath() {
     return app.isPackaged
         ? path.join(process.resourcesPath, 'app.asar', 'preload.js')
         : path.join(__dirname, 'preload.js');
+}
+
+function getMigrationPreloadPath() {
+    return app.isPackaged
+        ? path.join(process.resourcesPath, 'app.asar', 'migrationPreload.js')
+        : path.join(__dirname, 'migrationPreload.js');
 }
 
 function normalizeMountpoint(mountpoint) {
@@ -102,15 +112,48 @@ function toInt(value) {
     return Number.isFinite(parsed) ? parsed : NaN;
 }
 
+
+function detectObsInstalled(customPath = '') {
+  try {
+    if (customPath && fs.existsSync(customPath)) return { installed: true, path: customPath };
+
+    const candidates = [];
+    const pf = process.env.ProgramFiles;
+    const pfx86 = process.env["ProgramFiles(x86)"];
+
+    if (pf) candidates.push(path.join(pf, 'obs-studio', 'bin', '64bit', 'obs64.exe'));
+    if (pfx86) candidates.push(path.join(pfx86, 'obs-studio', 'bin', '64bit', 'obs64.exe'));
+
+    for (const p of candidates) {
+      if (p && fs.existsSync(p)) return { installed: true, path: p };
+    }
+
+    return { installed: false, path: '' };
+  } catch (err) {
+    return { installed: false, path: '', error: err?.message || String(err) };
+  }
+}
+
+function normalizeBool(v, defaultValue = false) {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'string') return v.toLowerCase() === 'true';
+  return defaultValue;
+}
 function sanitizeSettingsForApi(settings) {
     const safe = { ...(settings || {}) };
+
     if ('sourcepassword' in safe) {
         safe.sourcepassword = safe.sourcepassword ? '***' : '';
         safe.hasSourcePassword = !!(settings && settings.sourcepassword);
     }
+
+    if ('obsPassword' in safe) {
+        safe.obsPassword = safe.obsPassword ? '***' : '';
+        safe.hasObsPassword = !!(settings && settings.obsPassword);
+    }
+
     return safe;
 }
-
 
 
     function createDownloadingWindow() {
@@ -130,13 +173,21 @@ function sanitizeSettingsForApi(settings) {
   
   // Function to handle app initialization
   function initializeApp() {
+    if (appInitialized) return;
+    appInitialized = true;
     console.log("App Initialization started...");
+    if (isSmokeTest) {
+      console.log('[smoke-test]', JSON.stringify(buildStateSnapshot()));
+      setTimeout(() => app.quit(), 250);
+      return;
+    }
     loadAudioDevices(); // Example: Initialize any audio-related features
     
     createWindow(); // Open the main window of the app
     
     // Start the TCP server or any other background services
     tcpServer.startTCPServer();
+    setTimeout(() => reportHealthFromEnvironment(app.getVersion()), 1000);
     
     // Ensure that the app behaves as expected when activated (e.g., no duplicate windows)
     app.on('activate', () => {
@@ -233,6 +284,418 @@ function sanitizeSettingsForApi(settings) {
 
   // If the check hangs (offline, DNS, etc), continue startup.
   restartCheckTimeout();
+}
+
+const isSmokeTest = process.argv.includes('--smoke-test');
+let isHeadless = process.argv.includes('--headless') || isSmokeTest;
+const settingsFilePath = path.join(app.getPath('userData'), 'settings.json');
+const isSingleInstance = app.requestSingleInstanceLock();
+
+let listenerInterval = null;
+let currentListenerCount = 0;
+let mainWindow = null;
+let settingsWindow = null;
+let aboutWindow = null;
+let downloadingWindow = null;
+let migrationWindow = null;
+let migrationRunning = false;
+let latestMigrationStatus = null;
+let ffmpegProcess = null;
+let ffmpegRecordingProcess = null;
+let audioEngine = null;
+let obsClient = null;
+let isStreaming = false;
+let isRecording = false;
+let lastFfmpegError = '';
+let lastIcecastStatusTest = null;
+let lastListenUrlTest = null;
+let nowPlaying = '';
+const liveMode = { icecast: false, obs: false };
+let streamTimer = 0;
+let recordingTimer = 0;
+let recordingTimerInterval = null;
+let streamTimerInterval = null;
+const audioDevicesCache = [];
+
+global.streamActive = false;
+global.recordingActive = false;
+
+function createMigrationWindow() {
+    if (migrationWindow && !migrationWindow.isDestroyed()) return migrationWindow;
+    migrationWindow = new BrowserWindow({
+        width: 560,
+        height: 420,
+        minWidth: 500,
+        minHeight: 380,
+        maximizable: false,
+        closable: false,
+        title: 'Updating RebornBroadcaster',
+        backgroundColor: '#0b1020',
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: getMigrationPreloadPath(),
+        },
+    });
+    migrationWindow.setMenuBarVisibility(false);
+    migrationWindow.loadFile(path.join(__dirname, 'migration.html'));
+    migrationWindow.webContents.on('did-finish-load', () => {
+        if (latestMigrationStatus) migrationWindow?.webContents.send('migration-status', latestMigrationStatus);
+    });
+    migrationWindow.on('closed', () => { migrationWindow = null; });
+    return migrationWindow;
+}
+
+function setMigrationStatus(status) {
+    latestMigrationStatus = status;
+    if (migrationWindow && !migrationWindow.isDestroyed() && !migrationWindow.webContents.isLoading()) {
+        migrationWindow.webContents.send('migration-status', status);
+    }
+}
+
+function migrationError(result) {
+    return result?.error || result?.stderr || result?.stdout || 'The native update could not be prepared.';
+}
+
+async function runAgentMigration() {
+    if (migrationRunning) return;
+    migrationRunning = true;
+    createMigrationWindow();
+    setMigrationStatus({
+        state: 'working',
+        title: 'Preparing the native broadcaster',
+        message: 'Starting the secure update handoff…',
+    });
+
+    try {
+        const result = await bootstrapAndDoctor(app, IS_TESTING, shell, ({ phase, message }) => {
+            setMigrationStatus({ state: 'working', phase, title: 'Updating RebornBroadcaster', message });
+        });
+        if (!result.ok) {
+            console.warn(`[updater] agent migration failed during ${result.phase || 'startup'}: ${migrationError(result)}`);
+            setMigrationStatus({
+                state: 'error',
+                title: 'The native update did not finish',
+                message: migrationError(result),
+            });
+            return;
+        }
+
+        setMigrationStatus({
+            state: 'working',
+            title: 'Starting native RebornBroadcaster',
+            message: 'The update is verified. Activating it and opening the new app…',
+        });
+        tcpServer.stopTCPServer?.();
+        const launch = await launchStagedApp();
+        if (!launch.ok) throw new Error(launch.error);
+        setMigrationStatus({
+            state: 'success',
+            title: 'Native RebornBroadcaster is open',
+            message: 'Migration finished successfully. The legacy Electron app will now close, and the Reborn Update Agent will remain in the system tray.',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        app.quit();
+    } catch (error) {
+        console.error('[updater] unexpected agent migration failure:', error);
+        setMigrationStatus({
+            state: 'error',
+            title: 'The native update did not finish',
+            message: error?.message || String(error),
+        });
+    } finally {
+        migrationRunning = false;
+    }
+}
+
+ipcMain.on('migration-retry', () => {
+    if (!migrationRunning) runAgentMigration();
+});
+
+ipcMain.on('migration-continue-legacy', () => {
+    if (migrationRunning) return;
+    initializeApp();
+    if (migrationWindow && !migrationWindow.isDestroyed()) {
+        migrationWindow.setClosable(true);
+        migrationWindow.close();
+    }
+    setupAutoUpdater();
+});
+
+function readSettingsFromDisk() {
+    try {
+        if (!fs.existsSync(settingsFilePath)) return {};
+        return JSON.parse(fs.readFileSync(settingsFilePath, 'utf8'));
+    } catch (error) {
+        console.error('Unable to read settings:', error?.message || error);
+        return {};
+    }
+}
+
+function stripSecretsForExport(settings) {
+    const exported = { ...(settings || {}) };
+    delete exported.sourcepassword;
+    delete exported.obsPassword;
+    return exported;
+}
+
+function sendToApi(data) {
+    const socket = tcpServer.getApiSocket();
+    if (!tcpServer.getIsApiConnected() || !socket || socket.destroyed) return false;
+    socket.write(`${JSON.stringify(data)}\n`);
+    return true;
+}
+
+function sendSettingsToApi(settings) {
+    return sendToApi({ type: 'settings', settings: sanitizeSettingsForApi(settings) });
+}
+
+function buildStateSnapshot() {
+    return {
+        ok: true,
+        version: app.getVersion(),
+        headless: isHeadless,
+        streaming: isStreaming,
+        recording: isRecording,
+        outputs: {
+            icecast: { active: liveMode.icecast },
+            obs: { active: liveMode.obs },
+        },
+        listeners: currentListenerCount,
+        nowPlaying,
+        timers: { stream: streamTimer, recording: recordingTimer },
+        diagnostics: {
+            ffmpeg: lastFfmpegError,
+            icecast: lastIcecastStatusTest,
+            listenUrl: lastListenUrlTest,
+        },
+    };
+}
+
+function startStreamTimer() {
+    startTimers();
+}
+
+function stopStreamTimer() {
+    stopTimers();
+}
+
+function switchMode(fromApi = false) {
+    isHeadless = !isHeadless;
+    if (isHeadless) {
+        mainWindow?.hide();
+        if (fromApi) sendToApi({ type: 'renderer-hidden', status: 'headless mode' });
+        return;
+    }
+
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+    else {
+        mainWindow.show();
+        mainWindow.focus();
+    }
+    if (fromApi) sendToApi({ type: 'renderer-visible', status: 'normal mode' });
+}
+
+async function handleAppClose(sender, callType) {
+    const apiConnected = tcpServer.getIsApiConnected();
+    if (callType === 'Total') {
+        if (apiConnected) sendToApi({ type: 'disconnect', reason: 'graceful' });
+        gracefulShutdown();
+        return;
+    }
+
+    if (callType === 'Partial') {
+        if (sender === 'Api' && apiConnected) sendToApi({ type: 'disconnect', reason: 'graceful' });
+        if (sender === 'Renderer' && !apiConnected) {
+            gracefulShutdown();
+            return;
+        }
+        isHeadless = true;
+        mainWindow?.hide();
+        return;
+    }
+
+    if (callType !== 'Warning') return;
+    if (sender === 'Api' && apiConnected) sendToApi({ type: 'disconnect', reason: 'graceful' });
+    if (isHeadless || !mainWindow || mainWindow.isDestroyed()) {
+        gracefulShutdown();
+        return;
+    }
+
+    const { response } = await dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        buttons: ['Close App', 'Minimize to Background'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'RebornBroadcaster',
+        message: 'Do you want to close RebornBroadcaster?',
+        detail: 'Closing stops all services. Minimizing keeps broadcasting services available.',
+    });
+    if (response === 0) gracefulShutdown();
+    else {
+        isHeadless = true;
+        mainWindow.hide();
+    }
+}
+
+function createWindow() {
+    if (isHeadless) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.show();
+        mainWindow.focus();
+        return;
+    }
+
+    mainWindow = new BrowserWindow({
+        width: 760,
+        height: 780,
+        minWidth: 560,
+        minHeight: 480,
+        frame: false,
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: getPreloadPath(),
+        },
+    });
+    mainWindow.loadFile('broadcaster.html');
+    mainWindow.on('closed', () => {
+        if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close();
+        settingsWindow = null;
+        mainWindow = null;
+    });
+}
+
+function startListenerCountPolling(settings) {
+    if (listenerInterval) return;
+    const host = String(settings.icecastHost || '').trim();
+    const port = toInt(settings.icecastPort);
+    const mount = normalizeMountpoint(settings.mountpoint) || '/stream';
+    if (!host || !Number.isFinite(port)) return;
+
+    listenerInterval = setInterval(async () => {
+        try {
+            const response = await fetch(`http://${host}:${port}/status-json.xsl`);
+            if (!response.ok) throw new Error(`Icecast status returned HTTP ${response.status}`);
+            const data = await response.json();
+            const sources = data?.icestats?.source;
+            const sourceList = Array.isArray(sources) ? sources : (sources ? [sources] : []);
+            const source = sourceList.find((item) => {
+                const itemMount = normalizeMountpoint(item?.mount || '');
+                const listenPath = item?.listenurl ? new URL(item.listenurl).pathname : '';
+                return itemMount === mount || normalizeMountpoint(listenPath) === mount;
+            });
+            currentListenerCount = isStreaming ? Number(source?.listeners || 0) : 0;
+            BrowserWindow.getAllWindows().forEach((window) => {
+                window.webContents.send('listener-count-updated', currentListenerCount);
+                window.webContents.send('stream-status-updated', isStreaming ? 'Live' : 'Offline');
+            });
+        } catch (error) {
+            console.warn('Unable to poll Icecast listener count:', error?.message || error);
+        }
+    }, 5000);
+}
+
+function stopListenerCountPolling() {
+    if (listenerInterval) clearInterval(listenerInterval);
+    listenerInterval = null;
+    currentListenerCount = 0;
+    BrowserWindow.getAllWindows().forEach((window) => {
+        window.webContents.send('listener-count-updated', 0);
+        window.webContents.send('stream-status-updated', 'Offline');
+    });
+}
+
+function gracefulShutdown() {
+    try { obsClient?.close?.(); } catch (_) {}
+    try { ffmpegProcess?.kill?.('SIGINT'); } catch (_) {}
+    try { ffmpegRecordingProcess?.stdin?.write?.('q\n'); } catch (_) {}
+    stopListenerCountPolling();
+    tcpServer.stopTCPServer?.();
+    app.quit();
+}
+
+function startRecording({ settings, event = null, respond = null }) {
+    const reply = (payload) => {
+        event?.reply?.('start-recording-response', payload);
+        respond?.(payload);
+    };
+    if (!settings?.recordingPath || !settings?.audioSourceName) {
+        reply({ success: false, message: 'Recording path and audio source are required' });
+        return;
+    }
+    if (isRecording || (ffmpegRecordingProcess && !ffmpegRecordingProcess.killed)) {
+        reply({ success: false, message: 'Recording is already running' });
+        return;
+    }
+    if (!fs.existsSync(settings.recordingPath)) {
+        reply({ success: false, message: 'The recording path does not exist' });
+        return;
+    }
+
+    const encoding = String(settings.encodingType || 'mp3').toLowerCase();
+    const bitrate = Math.max(32, toInt(settings.bitrate) || 128);
+    const formats = {
+        mp3: { codec: 'libmp3lame', format: 'mp3', extension: 'mp3', options: ['-b:a', `${bitrate}k`] },
+        aac: { codec: 'aac', format: 'adts', extension: 'aac', options: ['-b:a', `${bitrate}k`] },
+        flac: { codec: 'flac', format: 'flac', extension: 'flac', options: [] },
+        opus: { codec: 'libopus', format: 'ogg', extension: 'opus', options: ['-b:a', `${bitrate}k`] },
+    };
+    const selected = formats[encoding];
+    if (!selected) {
+        reply({ success: false, message: `Unsupported recording encoding: ${encoding}` });
+        return;
+    }
+
+    const filename = `recording_${new Date().toISOString().replace(/[:.-]/g, '_')}.${selected.extension}`;
+    const outputPath = path.join(settings.recordingPath, filename);
+    const args = [
+        '-hide_banner', '-nostats',
+        '-f', 'dshow', '-i', `audio=${settings.audioSourceName}`,
+        '-acodec', selected.codec, ...selected.options,
+        '-f', selected.format, outputPath,
+    ];
+
+    let replied = false;
+    const replyOnce = (payload) => {
+        if (replied) return;
+        replied = true;
+        reply(payload);
+    };
+    try {
+        const processHandle = spawn(ffmpegPath, args, { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] });
+        ffmpegRecordingProcess = processHandle;
+        processHandle.once('spawn', () => {
+            isRecording = true;
+            global.recordingActive = true;
+            startTimers();
+            sendLog(`Recording started: ${outputPath}`);
+            replyOnce({ success: true, message: 'Recording started', filePath: outputPath });
+        });
+        processHandle.stderr.on('data', (data) => {
+            const line = String(data).trim();
+            if (line) sendLog(`[recording] ${line}`);
+        });
+        processHandle.once('error', (error) => {
+            isRecording = false;
+            global.recordingActive = false;
+            if (ffmpegRecordingProcess === processHandle) ffmpegRecordingProcess = null;
+            stopTimers();
+            replyOnce({ success: false, message: error.message });
+        });
+        processHandle.once('exit', (code, signal) => {
+            isRecording = false;
+            global.recordingActive = false;
+            if (ffmpegRecordingProcess === processHandle) ffmpegRecordingProcess = null;
+            stopTimers();
+            sendLog(`Recording stopped (code ${code ?? 'none'}, signal ${signal || 'none'})`);
+        });
+    } catch (error) {
+        ffmpegRecordingProcess = null;
+        isRecording = false;
+        global.recordingActive = false;
+        replyOnce({ success: false, message: error.message });
+    }
 }
 
 // Function to start the stream and recording timer
@@ -409,360 +872,203 @@ async function loadAudioDevices() {
 }
 
 
-async function startStream({ settings, event = null, respond = null }) {
-    const requiredFields = ['mountpoint', 'username', 'sourcepassword', 'bitrate', 'encodingType', 'audioSourceName', 'icecastHost', 'icecastPort'];
-    const missingFields = requiredFields.filter(field => !settings[field]);
 
-    if (missingFields.length) {
-        const errorMsg = `❌ Missing required settings: ${missingFields.join(', ')}`;
-        sendLog('❌ Stream Failed Error: ', errorMsg );
+function startIcecastEngine(settings, { event = null, respond = null } = {}) {
+  const missingFields = ['mountpoint', 'username', 'sourcepassword', 'icecastHost', 'icecastPort', 'bitrate', 'encodingType', 'audioSourceName']
+    .filter((f) => !settings?.[f]);
 
-        console.error(errorMsg);
-        if (event) event.reply('start-stream-response', { success: false, message: errorMsg });
-        if (respond) respond({ success: false, message: errorMsg });
-        return;
+  if (missingFields.length) {
+    const msg = `? Missing required settings: ${missingFields.join(', ')}`;
+    sendLog(msg);
+    event?.reply?.('start-stream-response', { success: false, message: msg });
+    respond?.({ success: false, message: msg });
+    throw new Error(msg);
+  }
+
+  if (audioEngine?.proc && !audioEngine.proc.killed) {
+    return;
+  }
+
+  const effectiveSettings = { ...settings };
+
+  const engine = startIcecastAudioStream({
+    ffmpegPath,
+    settings: effectiveSettings,
+    onLog: (t) => sendLog(String(t).trim()),
+    onStatus: (s) => {
+      if (s?.type === 'backoff') {
+        lastFfmpegError = `Backoff: targetBitrate=${s.targetBitrate} speed=${s.speed}`;
+      }
+    },
+    onNeedRestart: ({ newBitrate }) => {
+      // Backoff should not block OBS or UI; restart only the Icecast engine.
+      if (!global.streamActive) return;
+
+      try {
+        sendLog(`?? FFmpeg slow. Backing off bitrate to ${newBitrate}kbps and restarting Icecast stream...`);
+        const next = { ...readSettingsFromDisk(), bitrate: newBitrate };
+        stopIcecastEngine();
+        setTimeout(() => {
+          try {
+            startIcecastEngine(next, { event: null, respond: null });
+          } catch (err) {
+            sendLog(`? Backoff restart failed: ${err?.message || err}`);
+          }
+        }, 800);
+      } catch (_) {}
     }
+  });
 
-    if (isStreaming || ffmpegProcess) {
-        const msg = "⚠️ Stream is already running.";
-        console.warn(msg);
-        if (event) event.reply('start-stream-response', { success: false, message: msg });
-        if (respond) respond({ success: false, message: msg });
-        return;
-    }
+  audioEngine = engine;
+  ffmpegProcess = engine.proc;
 
-    const mount = normalizeMountpoint(settings.mountpoint);
-    const icecastPort = toInt(settings.icecastPort);
-    const bitrate = toInt(settings.bitrate);
+  global.streamActive = true;
+  isStreaming = true;
+  liveMode.icecast = true;
 
-    if (!mount) {
-        const msg = '❌ Invalid mountpoint';
-        if (event) event.reply('start-stream-response', { success: false, message: msg });
-        if (respond) respond({ success: false, message: msg });
-        return;
-    }
+  event?.reply?.('start-stream-response', { success: true, message: 'Stream started', url: engine.outputUrl });
+  respond?.({ success: true, message: 'Stream started', url: engine.outputUrl });
 
-    if (!Number.isFinite(icecastPort) || icecastPort < 1 || icecastPort > 65535) {
-        const msg = '❌ Invalid Icecast port (must be 1-65535)';
-        if (event) event.reply('start-stream-response', { success: false, message: msg });
-        if (respond) respond({ success: false, message: msg });
-        return;
-    }
+  // timers + listeners
+  startStreamTimer();
+  startListenerCountPolling(effectiveSettings);
 
-    if (!Number.isFinite(bitrate) || bitrate < 8) {
-        const msg = '❌ Invalid bitrate';
-        if (event) event.reply('start-stream-response', { success: false, message: msg });
-        if (respond) respond({ success: false, message: msg });
-        return;
-    }
+  BrowserWindow.getAllWindows().forEach((win) => {
+    try { win.webContents.send('stream-status-updated', 'Online'); } catch (_) {}
+  });
+}
 
-    let codec, extension, format;
-    let audioOptions = [`-b:a`, `${bitrate}k`];
+function stopIcecastEngine() {
+  try {
+    audioEngine?.stop?.();
+  } catch (_) {}
+  audioEngine = null;
 
-    switch (settings.encodingType) {
-        case 'mp3': codec = 'libmp3lame'; format = 'mp3'; extension = 'mp3'; break;
-        case 'aac': codec = 'aac'; format = 'adts'; extension = 'aac'; break;
-        case 'flac': codec = 'flac'; format = 'flac'; extension = 'flac'; audioOptions = []; break;
-        case 'opus': codec = 'libopus'; format = 'ogg'; extension = 'opus'; break;
-        default:
-            const msg = `❌ Unsupported encoding type: ${settings.encodingType}`;
-            console.error(msg);
-            if (event) event.reply('start-stream-response', { success: false, message: msg });
-            if (respond) respond({ success: false, message: msg });
-            return;
-    }
+  try { ffmpegProcess?.kill?.('SIGINT'); } catch (_) {}
+  ffmpegProcess = null;
+  global.streamActive = false;
+  isStreaming = false;
+  liveMode.icecast = false;
 
-    const contentType = (format === 'mp3'
-        ? 'audio/mpeg'
-        : (format === 'adts'
-            ? 'audio/aac'
-            : (format === 'ogg'
-                ? 'audio/ogg'
-                : 'application/octet-stream')));
+  stopStreamTimer();
+  stopListenerCountPolling();
 
-    const urlOptions = new URLSearchParams();
-    if (settings.streamName) urlOptions.set('ice_name', String(settings.streamName));
-    if (settings.streamGenre) urlOptions.set('ice_genre', String(settings.streamGenre));
-    if (settings.streamDescription) urlOptions.set('ice_description', String(settings.streamDescription));
-    if (settings.streamUrl) urlOptions.set('ice_url', String(settings.streamUrl));
-    urlOptions.set('ice_public', String(settings.streamPublic ?? '0'));
-    if (contentType) urlOptions.set('content_type', contentType);
+  BrowserWindow.getAllWindows().forEach((win) => {
+    try { win.webContents.send('stream-status-updated', 'Offline'); } catch (_) {}
+  });
+}
 
-    const outputUrl = `icecast://${settings.username}:${settings.sourcepassword}@${settings.icecastHost}:${icecastPort}${mount}${urlOptions.toString() ? `?${urlOptions}` : ''}`;
+async function getObsClient(settings) {
+  const host = String(settings.obsHost || '127.0.0.1').trim();
+  const port = Number(settings.obsPort || 4455);
+  const password = String(settings.obsPassword || '');
 
-    const ffmpegArgs = [
-        '-f', 'dshow',
-        '-i', `audio=${settings.audioSourceName}`,
-        '-acodec', codec,
-        ...audioOptions,
-        '-f', format,
-        outputUrl
-    ];
+  if (!obsClient || obsClient.host !== host || obsClient.port !== port || obsClient.password !== password) {
+    try { obsClient?.close?.(); } catch (_) {}
+    obsClient = new ObsWebsocketClient({ host, port, password });
+  }
 
-    console.log("🚀 Starting FFmpeg with:\n", ffmpegArgs.join(' '));
+  return obsClient;
+}
 
+async function startObsLive(settings) {
+  const obsInstalled = detectObsInstalled(settings.obsExePath);
+  if (!obsInstalled.installed) {
+    throw new Error('OBS not installed (or path not detected).');
+  }
+
+  const client = await getObsClient(settings);
+  await client.startStream();
+  liveMode.obs = true;
+}
+
+async function stopObsLive(settings) {
+  const client = await getObsClient(settings);
+  await client.stopStream();
+  liveMode.obs = false;
+}
+
+async function goLive(settings, { event = null, respond = null } = {}) {
+  const s = settings || {};
+  const icecastEnabled = s.icecastEnabled !== false;
+  const obsEnabled = !!s.obsEnabled;
+
+  const results = { icecast: 'skipped', obs: 'skipped', errors: {} };
+
+  if (icecastEnabled) {
     try {
-        ffmpegProcess = spawn(`${ffmpegPath}`, ffmpegArgs);
-        isStreaming = true;
-        startListenerCountPolling(settings);
-
-        let streamStarted = false;
-
-        ffmpegProcess.stdout.on('data', (data) => {
-            console.log('📢 [FFmpeg stdout]:', data.toString());
-        });
-
-        ffmpegProcess.stderr.on('data', (data) => {
-            const msg = data.toString();
-            const match = msg.match(/size=\s*\S+\s+time=\S+\s+bitrate=\s*\S+\s+speed=\s*\S+/);
-        
-            if (match) {
-                process.stdout.write(`\r📈 ${match[0]}   `);
-                return;
-            }
-        
-            // This message has already been handled
-            if (!streamStarted && msg.includes('Press [q] to stop')) {
-                console.log('\n✅ Stream confirmed live!');
-                sendLog('✅ Stream started');
-                startListenerCountPolling(settings);
-                streamStarted = true;
-                global.streamActive = true;
-                startTimers();
-                if (tcpServer.getIsApiConnected()) {
-                    sendToApi({ type: 'stream-status', status: 'live' });
-                }
-                return;
-            }
-        
-            // Special handling for common auth failure
-            if (msg.includes('401 Unauthorized') || msg.includes('authorization failed')) {
-                sendLog('Invalid Username Or Password');
-            }
-        
-            // ✅ Catch-all for any message with "error" that hasn't been handled
-            if (/error/i.test(msg)) {
-                lastFfmpegError = msg.trim().slice(0, 5000);
-                sendLog(`❌ Unhandled FFmpeg Error: ${msg.trim()}`);
-            }
-        
-            // Also log other stderr output just for visibility
-            console.error('⚠️ [FFmpeg stderr]:', msg);
-        });
-        
-        
-
-        ffmpegProcess.on('exit', (code, signal) => {
-            console.log(`🔴 FFmpeg exited with code ${code}, signal ${signal}`);
-            isStreaming = false;
-            global.streamActive = false;
-            ffmpegProcess = null;
-            stopListenerCountPolling();
-
-            sendLog('🔴 Stream Stopped');
-
-            stopTimers();
-            if (tcpServer.getIsApiConnected()) {
-                sendToApi({ type: 'stream-status', status: 'stopped', code, signal });
-            }
-        });
-
-        ffmpegProcess.on('error', (err) => {
-            console.error("❌ FFmpeg error:", err);
-            sendLog('❌ Stream Failed Error: ', err);
-
-            isStreaming = false;
-            global.streamActive = false;
-            ffmpegProcess = null;
-        });
-
-        const msg = "✅ Stream started successfully";
-        if (event) event.reply('start-stream-response', { success: true, message: msg });
-        if (respond) respond({ success: true, message: msg });
-
+      startIcecastEngine(s, { event: null, respond: null });
+      results.icecast = 'on';
     } catch (err) {
-        console.error("❌ Error starting FFmpeg:", err);
-        sendLog('❌ Stream Failed Error: ', err);
-        isStreaming = false;
-        global.streamActive = false;
-        ffmpegProcess = null;
-        sendLog('❌ Stream Failed');
-
-        if (event) event.reply('start-stream-response', { success: false, message: err.message });
-        if (respond) respond({ success: false, message: err.message });
+      results.icecast = 'error';
+      results.errors.icecast = err?.message || String(err);
     }
-}
+  }
 
-
-async function startRecording({ settings, event = null, respond = null }) {
-    console.log("⚙️ Received settings for recording:", settings);
-
-    // Validation
-    if (!settings || settings.error || !settings.recordingPath) {
-        console.error("❌ Failed to load settings:", settings?.error || "Missing required values.");
-        sendLog('❌ Recording Failed Error: ', settings?.error || "Missing required values.");
-
-        const msg = settings?.error || 'Failed to load settings';
-        if (respond) respond({ success: false, message: msg });
-        if (event) event.reply('start-recording-response', { success: false, message: msg });
-        return;
-    }
-
-    if (isRecording) {
-        console.error('⚠️ Recording is already in progress');
-        const msg = 'Recording is already running';
-        if (respond) respond({ success: false, message: msg });
-        if (event) event.reply('start-recording-response', { success: false, message: msg });
-        return;
-    }
-
-    if (!fs.existsSync(settings.recordingPath)) {
-        console.error('❌ No valid recording path specified');
-        const msg = 'No valid recording path specified';
-        if (respond) respond({ success: false, message: msg });
-        if (event) event.reply('start-recording-response', { success: false, message: msg });
-        return;
-    }
-
-    let codec, format, extension;
-    let audioOptions = [];
-
-    // Determine encoding options
-    switch (settings.encodingType) {
-        case 'mp3': codec = 'libmp3lame'; format = 'mp3'; extension = 'mp3'; audioOptions = ['-b:a', `${settings.bitrate}k`]; break;
-        case 'aac': codec = 'aac'; format = 'adts'; extension = 'aac'; audioOptions = ['-b:a', `${settings.bitrate}k`]; break;
-        case 'flac': codec = 'flac'; format = 'flac'; extension = 'flac'; break;
-        case 'opus': codec = 'libopus'; format = 'ogg'; extension = 'opus'; audioOptions = ['-b:a', `${settings.bitrate}k`]; break;
-        default:
-            console.error('❌ Unsupported encoding type:', settings.encodingType);
-            {
-                const msg = 'Unsupported encoding type';
-                if (respond) respond({ success: false, message: msg });
-                if (event) event.reply('start-recording-response', { success: false, message: msg });
-            }
-            return;
-    }
-
-    // Set up file path and name
-    const audioDevice = settings.audioSourceName;
-    const fileName = `recording_${new Date().toISOString().replace(/[:.-]/g, '_')}.${extension}`;
-    const filePath = path.join(settings.recordingPath, fileName);
-
-    // Prevent overwriting existing files
-    if (fs.existsSync(filePath)) {
-        console.error(`❌ File already exists: ${filePath}`);
-        sendLog(`❌ File already exists: ${filePath}`);
-        const msg = 'Recording stopped, file already exists';
-        if (respond) respond({ success: false, message: msg });
-        if (event) event.reply('start-recording-response', { success: false, message: msg });
-        return;
-    }
-
-    // Set up ffmpeg arguments for recording
-    const ffmpegArgs = [
-        '-f', 'dshow',
-        '-i', `audio=${audioDevice}`,
-        '-acodec', codec,
-        ...audioOptions,
-        '-f', format,
-        filePath
-    ];
-
-    console.log("📼 Starting FFmpeg recording with args:\n", ffmpegArgs.join(' '));
-
+  if (obsEnabled) {
     try {
-        // Spawn the FFmpeg process
-        ffmpegRecordingProcess = spawn(`${ffmpegPath}`, ffmpegArgs);
-        isRecording = true;
-
-        let recordingStarted = false;
-
-        // Handle standard output from FFmpeg
-        ffmpegRecordingProcess.stdout.on('data', (data) => {
-            console.log('📢 [FFmpeg Recording stdout]:', data.toString());
-        });
-
-        // Handle error output from FFmpeg
-        ffmpegRecordingProcess.stderr.on('data', (data) => {
-            const msg = data.toString();
-
-            const match = msg.match(/size=\s*\S+\s+time=\S+\s+bitrate=\s*\S+\s+speed=\s*\S+/);
-            if (match) {
-                process.stdout.write(`\r📈 ${match[0]}   `);
-            } else {
-                console.error('⚠️ [FFmpeg Recording stderr]:', msg);
-            }
-
-            if (!recordingStarted && msg.includes('Press [q] to stop')) {
-                isRecording = true;
-                recordingStarted = true;
-                global.recordingActive = true;
-                console.log('\n✅ FFmpeg recording confirmed live!');
-                sendLog('✅ Recording started');
-
-                startTimers();
-                if (tcpServer.getIsApiConnected()) {
-                    sendToApi({ type: 'recording-status', status: 'live', filePath });
-                }
-            }
-        });
-
-        // Handle FFmpeg process exit
-        ffmpegRecordingProcess.on('exit', (code, signal) => {
-            console.log(`🔴 FFmpeg recording exited with code ${code}, signal ${signal}`);
-            isRecording = false;
-            sendLog('🔴 Recording Stopped');
-
-            global.recordingActive = false;
-            ffmpegRecordingProcess = null;
-            stopTimers();
-            if (tcpServer.getIsApiConnected()) {
-                sendToApi({ type: 'recording-status', status: 'stopped', code, signal });
-            }
-        });
-
-        // Handle FFmpeg process error
-        ffmpegRecordingProcess.on('error', (err) => {
-            console.error("❌ FFmpeg recording failed to start:", err);
-            sendLog('❌ Recording Failed: ', err);
-
-            isRecording = false;
-            global.recordingActive = false;
-            ffmpegRecordingProcess = null;
-        });
-
-        const msg = `Recording started: ${filePath}`;
-        if (respond) respond({ success: true, message: msg, filePath });
-        if (event) event.reply('start-recording-response', { success: true, message: msg, filePath });
-
+      await startObsLive(s);
+      results.obs = 'on';
     } catch (err) {
-        console.error("❌ Error starting FFmpeg recording:", err);
-        isRecording = false;
-        ffmpegRecordingProcess = null;
-        sendLog('❌ Recording Failed: ', err);
-
-        const msg = err?.message || 'Error starting recording';
-        if (respond) respond({ success: false, message: msg });
-        if (event) event.reply('start-recording-response', { success: false, message: msg });
+      results.obs = 'error';
+      results.errors.obs = err?.message || String(err);
     }
+  }
+
+  const anyOn = results.icecast === 'on' || results.obs === 'on';
+
+  event?.reply?.('go-live-response', { success: anyOn, result: results });
+  respond?.({ success: anyOn, result: results });
+  sendLog(`Go Live: ${JSON.stringify(results)}`);
+
+  if (!anyOn) {
+    throw new Error(results.errors?.obs || results.errors?.icecast || 'Go Live failed');
+  }
+
+  return results;
 }
+async function stopLive(settings, { event = null, respond = null } = {}) {
+  const s = settings || {};
+  const icecastEnabled = s.icecastEnabled !== false;
+  const obsEnabled = !!s.obsEnabled;
 
+  const results = { icecast: 'skipped', obs: 'skipped', errors: {} };
 
-function gracefulShutdown() {
-    console.log('🔻 Gracefully shutting down...');
-
-    if (global.apiSocket) {
-        global.apiSocket.end(() => {
-            console.log('🛑 API connection closed.');
-        });
+  if (obsEnabled) {
+    try {
+      await stopObsLive(s);
+      results.obs = 'off';
+    } catch (err) {
+      results.obs = 'error';
+      results.errors.obs = err?.message || String(err);
     }
+  }
 
-    if (global.streamActive) ipcMain.emit('stop-stream');
-    if (global.recordingActive) ipcMain.emit('stop-recording');
+  if (icecastEnabled) {
+    try {
+      stopIcecastEngine();
+      results.icecast = 'off';
+    } catch (err) {
+      results.icecast = 'error';
+      results.errors.icecast = err?.message || String(err);
+    }
+  }
 
-    app.quit();
+  const okIcecast = results.icecast === 'off' || results.icecast === 'skipped';
+  const okObs = results.obs === 'off' || results.obs === 'skipped';
+  const success = okIcecast && okObs;
+
+  event?.reply?.('stop-live-response', { success, result: results });
+  respond?.({ success, result: results });
+  sendLog(`Stop Live: ${JSON.stringify(results)}`);
+
+  // Don't throw unless *everything* failed.
+  if (!success && okIcecast === false && okObs === false) {
+    throw new Error('Stop Live had errors');
+  }
+
+  return results;
 }
-
 
 
 function getWindowFromWebContents(sender) {
@@ -782,20 +1088,13 @@ ipcMain.on('window-close', (event) => {
 
 // Handler for starting the stream
 ipcMain.on('start-stream', (event) => {
-    console.log("🟢 Received start-stream request from renderer");
-
     const settings = readSettingsFromDisk() || {};
-
-    const hasReply = event && typeof event.reply === 'function';
-    const respond = hasReply
-        ? null
-        : (payload) => sendToApi({ type: 'start-stream-response', ...payload });
-
-    startStream({ settings, event: hasReply ? event : null, respond });
+    try {
+      startIcecastEngine(settings, { event });
+    } catch (err) {
+      event.reply('start-stream-response', { success: false, message: err?.message || String(err) });
+    }
 });
-
-
-
 // Handler for starting the recording
 ipcMain.on('start-recording', (event) => {
     console.log("🎙️ Start recording request received...");
@@ -988,71 +1287,13 @@ ipcMain.on('stop-recording', (event) => {
 
 // Stop the streaming gracefully (using ipcMain.on) with headless and API connection checks
 ipcMain.on('stop-stream', (event) => {
-    if (!isStreaming) {
-        console.error('No active stream to stop');
-
-        if (event && typeof event.reply === 'function') {
-            event.reply('stop-stream-response', 'No active stream to stop');
-        }
-
-        if (tcpServer.getIsApiConnected()) {
-            sendToApi({ type: 'stop-stream-response', success: false, message: 'No active stream to stop' });
-        }
-
-        return;
+    try {
+      stopIcecastEngine();
+      event.reply('stop-stream-response', { success: true, message: 'Stream stopped' });
+    } catch (err) {
+      event.reply('stop-stream-response', { success: false, message: err?.message || String(err) });
     }
-
-    console.log('Stopping stream gracefully...');
-    ffmpegProcess.stdin.write('q\n');
-
-    ffmpegProcess.on('exit', (code, signal) => {
-        const success = code === 0;
-        const message = success
-            ? 'Streaming stopped successfully'
-            : `Streaming failed to stop (code: ${code}, signal: ${signal})`;
-
-        if (event && typeof event.reply === 'function') {
-            event.reply('stop-stream-response', message);
-        }
-
-        if (tcpServer.getIsApiConnected()) {
-            sendToApi({
-                action: success ? 'stop-stream-success' : 'stop-stream-error',
-                message,
-            });
-            sendToApi({ type: 'stop-stream-response', success, message, code, signal });
-        }
-
-        if (!isHeadless && mainWindow) {
-            mainWindow.webContents.send('stop-stream-response', message);
-        }
-
-        ffmpegProcess = null;
-        isStreaming = false;
-        global.streamActive = false;
-
-        if (tcpServer.getIsApiConnected()) {
-            sendToApi({ type: 'stream-status', status: 'stopped' });
-        }
-    });
-
-
-    // Optional timeout in case FFmpeg hangs and doesn't exit (can be adjusted as necessary)
-    setTimeout(() => {
-        if (isStreaming) {
-            console.warn('Streaming stop timed out, forcing process termination');
-            ffmpegProcess.kill(); // Forcefully kill the process if it takes too long
-            isStreaming = false;
-            if (event && typeof event.reply === 'function') {
-                event.reply('stop-stream-response', 'Streaming stop timed out, process killed');
-            }
-            if (tcpServer.getIsApiConnected()) {
-                sendToApi({ type: 'stop-stream-response', success: false, message: 'Streaming stop timed out, process killed' });
-            }
-        }
-    }, 10000); // Wait for 10 seconds before forcefully killing the process
 });
-
 
 
 // Get the current recording status
@@ -1250,7 +1491,37 @@ ipcMain.handle('icecast-test', async (event, { icecastHost, icecastPort, mountpo
     }
 });
 
-ipcMain.handle('icecast-test-listen-url', async (event, { icecastHost, icecastPort, mountpoint }) => {
+ipcMain.on('go-live', async (event) => {
+    const settings = readSettingsFromDisk() || {};
+    try {
+      await goLive(settings, { event });
+    } catch (err) {
+      event.reply('go-live-response', { success: false, message: err?.message || String(err) });
+    }
+  });
+
+  ipcMain.on('stop-live', async (event) => {
+    const settings = readSettingsFromDisk() || {};
+    try {
+      await stopLive(settings, { event });
+    } catch (err) {
+      event.reply('stop-live-response', { success: false, message: err?.message || String(err) });
+    }
+  });
+
+  ipcMain.handle('obs-test', async (event, params) => {
+    const settings = { ...(readSettingsFromDisk() || {}), ...(params || {}) };
+    try {
+      const installed = detectObsInstalled(settings.obsExePath);
+      if (!installed.installed) return { ok: false, message: 'OBS not installed (path not detected)' };
+      const client = await getObsClient(settings);
+      return await client.test();
+    } catch (err) {
+      return { ok: false, message: err?.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('icecast-test-listen-url', async (event, { icecastHost, icecastPort, mountpoint }) => {
     const host = String(icecastHost || '').trim();
     const port = toInt(icecastPort);
     const mount = normalizeMountpoint(mountpoint);
@@ -1620,7 +1891,6 @@ ipcMain.on('confirm-close-response', (event, userConfirmed) => {
 
 if (!isSingleInstance) {
     app.quit();
-    return;
 }
 
 // When another instance is launched, we handle mode switching
@@ -1645,19 +1915,19 @@ app.whenReady().then(() => {
     console.log("App is ready.");
 
     if (isDev) {
-      console.log("Development mode � skipping update check...");
+      console.log("Development mode — skipping update check...");
       initializeApp();
       return;
     }
 
     if (isHeadless) {
-      console.log("Headless mode � skipping update check...");
+      console.log("Headless mode — skipping update check...");
       initializeApp();
       return;
     }
 
-    console.log("Checking for updates...");
-    setupAutoUpdater();
+    console.log("Preparing Reborn Update Agent migration…");
+    runAgentMigration();
   });
 
 app.on('window-all-closed', () => {

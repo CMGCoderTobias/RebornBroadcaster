@@ -130,6 +130,14 @@ const server = net.createServer((socket) => {
                     ipcMain.emit('stop-stream');
                     response = 'Stopping stream...';
                     break;
+                case 'go-live':
+                    ipcMain.emit('go-live');
+                    response = 'Going live...';
+                    break;
+                case 'stop-live':
+                    ipcMain.emit('stop-live');
+                    response = 'Stopping live...';
+                    break;
                 case 'start-recording':
                     ipcMain.emit('start-recording');
                     response = 'Starting recording...';

@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "appId": "rebornbroadcaster",
+  "displayName": "RebornBroadcaster",
+  "fallbackExecutable": "RebornBroadcaster.exe"
+}

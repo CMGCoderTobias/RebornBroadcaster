@@ -23,6 +23,7 @@
                     <button type="button" class="settings-tab active" data-panel="stream">Stream</button>
                     <button type="button" class="settings-tab" data-panel="audio">Audio</button>
                     <button type="button" class="settings-tab" data-panel="recording">Recording</button>
+                    <button type="button" class="settings-tab" data-panel="obs">ScrollBytes Live</button>
                     <button type="button" class="settings-tab" data-panel="config">Config</button>
                 </div>
 
@@ -146,6 +147,48 @@
                         </div>
                         <p style="margin-top: 0;">Recording uses the selected audio device and encoding type.</p>
                     </div>
+                    <div class="settings-panel" data-panel="obs">
+                        <h3 style="margin-top: 0;">ScrollBytes Live</h3>
+
+                        <div id="obsInstallStatus" style="margin-bottom: 10px; font-family: monospace;"></div>
+
+                        <div class="form-group">
+                            <label style="display:flex; gap:8px; align-items:center;">
+                                <input type="checkbox" id="icecastEnabled" />
+                                Stream to Radio (Icecast)
+                            </label>
+                        </div>
+
+                        <div class="form-group">
+                            <label style="display:flex; gap:8px; align-items:center;">
+                                <input type="checkbox" id="obsEnabled" />
+                                Stream to ScrollBytes (OBS/IVS)
+                            </label>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="obsHost">OBS Host</label>
+                            <input type="text" id="obsHost" name="obsHost" placeholder="127.0.0.1" />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="obsPort">OBS Port</label>
+                            <input type="number" id="obsPort" name="obsPort" min="1" max="65535" step="1" placeholder="4455" />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="obsPassword">OBS Password (optional)</label>
+                            <input type="password" id="obsPassword" name="obsPassword" />
+                        </div>
+
+                        <div class="form-group">
+                            <button type="button" id="testObsButton">Test OBS Connection</button>
+                            <div id="obsTestResult" style="margin-top: 8px; font-family: monospace;"></div>
+                        </div>
+
+                        <p style="margin-top: 0;">OBS must be installed and obs-websocket enabled (v5). IVS server/key stays configured inside OBS.</p>
+                    </div>
+
 
                     <div class="settings-panel" data-panel="config">
                         <div class="btn-container" style="margin-bottom: 12px;">

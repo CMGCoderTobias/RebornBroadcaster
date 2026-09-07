@@ -1,0 +1,5 @@
+PySide6-Essentials<7,>=6.8
+websockets<17,>=13
+
+[build]
+nuitka==4.1.1

@@ -1,6 +1,8 @@
+let liveActive = false;
 let streamTimer = 0;
 let recordingTimer = 0;
 let currentSettings = {};
+const goLiveButton = document.getElementById('goLiveButton');
 
 // Load settings when the page is loaded
 window.electron.loadSettings().then((settings) => {
@@ -134,6 +136,7 @@ function updateStatus() {
     const timerDisplay = document.getElementById('timerDisplay');
     const streamButton = document.getElementById('startStreamButton');
     const recordButton = document.getElementById('startRecordingButton');
+    const goLiveButton = document.getElementById('goLiveButton');
 
     const streamActive = streamTimer > 0;
     const recordingActive = recordingTimer > 0;
@@ -226,4 +229,31 @@ window.electron.onConfirmClose(({ from }) => {
 function handleCloseButtonClick() {
     // You can pass 'Warning', 'Partial', or 'Total' here depending on context
     window.electron.requestAppClose('Warning');
+}
+
+
+// GO LIVE: Start/Stop Icecast + OBS based on toggles
+if (goLiveButton) {
+    goLiveButton.addEventListener('click', async () => {
+        try {
+            const streamActive = streamTimer > 0;
+            const recordingActive = recordingTimer > 0;
+
+            const isLive = liveActive || streamActive || recordingActive;
+
+            if (!isLive) {
+                logToUI('Go Live...');
+                const res = await window.electron.goLive();
+                liveActive = !!res?.success;
+                logToUI(`Go Live: ${JSON.stringify(res?.result || {})}`);
+            } else {
+                logToUI('Stop Live...');
+                const res = await window.electron.stopLive();
+                if (res?.success) liveActive = false;
+                logToUI(`Stop Live: ${JSON.stringify(res?.result || {})}`);
+            }
+        } catch (err) {
+            logToUI(`Live failed: ${err?.message || err}`);
+        }
+    });
 }

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Updating RebornBroadcaster</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      color: #eef2ff;
+      background: radial-gradient(circle at top right, #183455 0, #0b1020 44%, #070a13 100%);
+    }
+    main { width: min(460px, calc(100vw - 56px)); }
+    .brand { color: #67e8f9; font-size: 13px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 14px 0 10px; font-size: 27px; line-height: 1.15; }
+    p { min-height: 50px; margin: 0; color: #b8c2d9; font-size: 15px; line-height: 1.6; }
+    .track { height: 7px; margin: 28px 0 20px; overflow: hidden; border-radius: 99px; background: #1d2940; }
+    .bar { width: 42%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #22d3ee, #8b5cf6); animation: travel 1.25s ease-in-out infinite alternate; }
+    .state { display: flex; align-items: center; gap: 9px; color: #91a0bb; font-size: 13px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #22d3ee; box-shadow: 0 0 16px #22d3ee; }
+    .actions { display: none; gap: 12px; margin-top: 26px; }
+    button { padding: 10px 16px; border: 1px solid #334463; border-radius: 9px; color: #eaf0ff; background: #172238; font: inherit; font-weight: 700; cursor: pointer; }
+    button.primary { border-color: transparent; background: linear-gradient(135deg, #0891b2, #6d4de3); }
+    body.error .bar { width: 100%; animation: none; background: #ef4444; }
+    body.error .dot { background: #ef4444; box-shadow: 0 0 16px #ef4444; }
+    body.error .actions { display: flex; }
+    body.success .bar { width: 100%; animation: none; background: #22c55e; }
+    body.success .dot { background: #22c55e; box-shadow: 0 0 16px #22c55e; }
+    @keyframes travel { from { transform: translateX(-12%); } to { transform: translateX(150%); } }
+    @media (prefers-reduced-motion: reduce) { .bar { animation-duration: 3s; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">Reborn Entertainment</div>
+    <h1 id="title">Preparing the native broadcaster</h1>
+    <p id="message">Starting the secure update handoff…</p>
+    <div class="track" aria-hidden="true"><div class="bar"></div></div>
+    <div class="state"><span class="dot"></span><span id="phase">Migration in progress</span></div>
+    <div class="actions">
+      <button class="primary" id="retry">Retry</button>
+      <button id="continue">Continue with legacy app</button>
+    </div>
+  </main>
+  <script>
+    const title = document.getElementById('title');
+    const message = document.getElementById('message');
+    const phase = document.getElementById('phase');
+    window.rebornMigration.onStatus((status) => {
+      document.body.className = status.state || 'working';
+      title.textContent = status.title || 'Updating RebornBroadcaster';
+      message.textContent = status.message || '';
+      phase.textContent = status.state === 'error'
+        ? 'Migration paused'
+        : status.state === 'success' ? 'Handoff ready' : 'Migration in progress';
+    });
+    document.getElementById('retry').addEventListener('click', () => window.rebornMigration.retry());
+    document.getElementById('continue').addEventListener('click', () => window.rebornMigration.continueLegacy());
+  </script>
+</body>
+</html>

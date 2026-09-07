@@ -88,6 +88,27 @@ contextBridge.exposeInMainWorld('electron', {
   testIcecast: (params) => ipcRenderer.invoke('icecast-test', params),
   updateNowPlaying: (params) => ipcRenderer.invoke('icecast-update-now-playing', params),
   testListenUrl: (params) => ipcRenderer.invoke('icecast-test-listen-url', params),
+  testObs: (params) => ipcRenderer.invoke('obs-test', params),
+  goLive: () =>
+    new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Timeout waiting for go-live response')), 20000);
+      ipcRenderer.once('go-live-response', (event, response) => {
+        clearTimeout(timeout);
+        if (response?.success) resolve(response);
+        else reject(new Error(response?.message || 'Go Live failed'));
+      });
+      ipcRenderer.send('go-live');
+    }),
+  stopLive: () =>
+    new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Timeout waiting for stop-live response')), 20000);
+      ipcRenderer.once('stop-live-response', (event, response) => {
+        clearTimeout(timeout);
+        if (response?.success) resolve(response);
+        else reject(new Error(response?.message || 'Stop Live failed'));
+      });
+      ipcRenderer.send('stop-live');
+    }),
   exportConfig: (params) => ipcRenderer.invoke('export-config', params),
   getState: () => ipcRenderer.invoke('get-state'),
 

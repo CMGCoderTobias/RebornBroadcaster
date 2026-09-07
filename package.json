@@ -1,27 +1,39 @@
 {
   "name": "rebornbroadcaster",
-  "version": "0.0.9",
+  "version": "0.1.7",
   "main": "main.js",
   "description": "A powerful broadcaster app for media professionals.",
   "author": "ConliffeMediaGroup",
   "license": "ISC",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "start": "electron .",
     "start-headless": "electron . --headless",
-    "build": "electron-builder"
+    "native:install": "powershell -NoProfile -ExecutionPolicy Bypass -File native/scripts/setup.ps1",
+    "native": "powershell -NoProfile -ExecutionPolicy Bypass -File native/scripts/run.ps1",
+    "native:core": "powershell -NoProfile -ExecutionPolicy Bypass -File native/scripts/run.ps1 -Core",
+    "native:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File native/scripts/run.ps1 -Smoke",
+    "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
+    "prepare:updater": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-updater-assets.ps1",
+    "build:electron": "electron-builder",
+    "build:migration": "npm run prepare:updater && electron-builder",
+    "build:dual-release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-dual-release.ps1",
+    "build": "npm run build:migration"
   },
   "keywords": [],
   "dependencies": {
-    "@ffmpeg-installer/ffmpeg": "^1.1.0",
-    "axios": "^1.8.4",
-    "electron-updater": "^6.6.2",
+    "axios": "^1.20.0",
+    "electron-updater": "^6.8.9",
+    "ffmpeg-static": "5.3.0",
     "iconv-lite": "^0.6.3",
     "net": "^1.0.2",
     "node-fetch": "^3.3.2"
   },
   "devDependencies": {
-    "electron": "^35.0.3",
-    "electron-builder": "^23.6.0"
+    "electron": "^44.1.0",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.conliffemediagroup.rebornbroadcaster",
@@ -34,6 +46,14 @@
     "files": [
       "**/*",
       "!dist/**",
+      "!release-output/**",
+      "!release-staging/**",
+      "!updater-runtime/**",
+      "!legacy-electron/**",
+      "!native/.build-venv/**",
+      "!native/.venv/**",
+      "!native/build/**",
+      "!native/deployment/**",
       "!.git/**",
       "!node_modules/**/{test,tests,__tests__}/**",
       "!node_modules/**/{docs,doc,example,examples}/**",
@@ -44,11 +64,18 @@
       "!**/*.md"
     ],
     "asarUnpack": [
-      "node_modules/@ffmpeg-installer/win32-x64/ffmpeg.exe"
+      "node_modules/ffmpeg-static/ffmpeg.exe"
+    ],
+    "extraResources": [
+      {
+        "from": "updater-runtime",
+        "to": "updater"
+      }
     ],
     "win": {
       "target": "nsis",
-      "icon": "assets/KRBroadcasterIcon.png"
+      "icon": "assets/KRBroadcasterIcon.png",
+      "artifactName": "RebornBroadcaster-Setup-${version}.${ext}"
     },
     "mac": {
       "category": "public.app-category.productivity"

@@ -11,11 +11,11 @@ Notable components:
 2) Node.js (MIT License)
    https://nodejs.org/
 
-3) FFmpeg binary distributed via @ffmpeg-installer/ffmpeg (package license: LGPL-2.1)
-   https://github.com/kribblo/node-ffmpeg-installer
-   FFmpeg itself is a separate project with its own licensing terms.
-   If you redistribute this application, make sure you comply with FFmpeg’s license requirements
-   for the particular FFmpeg build you ship.
+3) FFmpeg 6.1.1 binary distributed via ffmpeg-static 5.3.0
+   https://github.com/eugeneware/ffmpeg-static
+   The bundled Windows build is GPL v3 and is shipped as a separate executable.
+   Its complete license and build/source information are included as FFMPEG-LICENSE.txt
+   and FFMPEG-README.txt beside the application executable.
 
 Other direct dependencies used by this app (see their repositories for license text):
 - axios

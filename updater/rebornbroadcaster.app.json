@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "appId": "rebornbroadcaster",
+  "displayName": "RebornBroadcaster",
+  "currentVersion": "0.1.7",
+  "manifestUrl": "https://kosradio.com/security/v1/updates/rebornbroadcaster/manifest",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBqTJ2HDDwvlPe0e8E8gPgBbE7psK\nm7SvLoaQyEPXRmiErDoP/GHxU9w6FIqN3hCVYeaEBOcQzGsYeupppijz5A==\n-----END PUBLIC KEY-----",
+  "channel": "stable",
+  "installRoot": "C:\\placeholder-overridden-during-migration",
+  "executable": "RebornBroadcaster.exe",
+  "windowsUninstall": {
+    "registryKey": "RebornEntertainment.RebornBroadcaster",
+    "publisher": "Reborn Entertainment",
+    "legacyRegistryKeys": ["6b03977d-8ab2-5315-b295-9b3fafee59e9"],
+    "shortcuts": [
+      { "location": "startMenu", "relativePath": "Programs/RebornBroadcaster.lnk" },
+      { "location": "desktop", "relativePath": "RebornBroadcaster.lnk" }
+    ]
+  },
+  "autoDownload": true,
+  "installOnNextLaunch": true,
+  "prepareUpdate": {
+    "host": "127.0.0.1",
+    "port": 8010,
+    "command": "prepare-update",
+    "required": false
+  }
+}
