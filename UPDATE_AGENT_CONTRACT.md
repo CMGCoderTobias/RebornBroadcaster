@@ -1,11 +1,11 @@
 # RebornBroadcaster Update Integration
 
-RebornBroadcaster uses RebornUpdateAgent `1.0.2` as its framework-neutral updater. The authoritative reusable protocol is `D:\Reborn Entertainment\Reborn\Coding\RebornUpdateAgent\APP_INTEGRATION_GUIDE.md`; this file records only this application's implementation.
+RebornBroadcaster uses the current RebornUpdateAgent build as its framework-neutral updater. The authoritative reusable protocol is `D:\Reborn Entertainment\Reborn\Coding\RebornUpdateAgent\APP_INTEGRATION_GUIDE.md`; this file records only this application's implementation.
 
 ## Identity
 
 - App ID: `rebornbroadcaster`
-- Current app version: `0.1.7`
+- Current app version: `0.1.8`
 - Production manifest: `https://kosradio.com/security/v1/updates/rebornbroadcaster/manifest`
 - Windows runtime: `win-x64`
 - Package entry point: `RebornBroadcaster.exe`
@@ -26,7 +26,7 @@ Do not publish Electron and Qt payloads under the same `0.0.9` version. An updat
 
 `npm run build` remains the migration build while Electron is the installed fallback. It:
 
-1. Copies `RebornUpdateBootstrap.exe` and `RebornAppLauncher.exe` from the sibling RebornUpdateAgent `1.0.2` build.
+1. Copies `RebornUpdateBootstrap.exe` and `RebornAppLauncher.exe` from the sibling RebornUpdateAgent build.
 2. Packages those files and the public registration under `resources\updater`.
 3. Starts RebornBroadcaster immediately on first launch.
 4. Runs bootstrap/adoption and `doctor` in the background.
@@ -65,7 +65,7 @@ The public GitHub provider in the released Electron client always resolves updat
 
 Open either file directly in Reborn Release Publisher. The signing-key path is resolved relative to the config and points to the private key held by the sibling RebornUpdateAgent checkout. The key is never copied into this repository or either application payload. Do not remove the legacy bridge assets from stable releases until support for every pre-agent Electron installation has intentionally ended.
 
-The native UI reports health only after its QML window exists and the isolated core is connected. The Electron fallback reports health after its window and TCP service initialize. Both validate that the agent executable is inside the expected per-user agent directory before invoking it.
+The native UI reports health only after its QML window exists and the isolated core is connected, then uses `request-check --app rebornbroadcaster` for a detached, coalesced background check. The Electron fallback reports health after its window and TCP service initialize. Both validate that the agent executable is inside the expected per-user agent directory before invoking it.
 
 ## Update safety
 

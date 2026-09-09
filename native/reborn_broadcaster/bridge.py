@@ -17,7 +17,8 @@ from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
 from PySide6.QtCore import QUrl
 
 from . import __version__
-from .paths import is_packaged, packaged_executable
+from .paths import controller_exit_request_path, is_packaged, packaged_executable
+from .updater_health import launched_version, read_update_status, request_update_apply, request_update_check
 
 
 class CoreBridge(QObject):
@@ -27,8 +28,10 @@ class CoreBridge(QObject):
     stateJsonChanged = Signal()
     settingsJsonChanged = Signal()
     messageChanged = Signal()
+    updateStatusChanged = Signal()
     exitReady = Signal()
     _resultReady = Signal(object)
+    _updateResultReady = Signal(object)
 
     def __init__(self, host: str = "127.0.0.1", port: int = 8010, auto_start: bool = True) -> None:
         super().__init__()
@@ -43,10 +46,25 @@ class CoreBridge(QObject):
         self._state_json = "{}"
         self._settings_json = "{}"
         self._message = "Connecting to broadcast core…"
+        self._update_status = {
+            "state": "idle",
+            "launchedVersion": launched_version(),
+            "currentVersion": launched_version(),
+            "latestVersion": "",
+        }
+        self._update_status_json = json.dumps(self._update_status)
+        self._update_refresh_running = False
         self._last_activity_sequence = 0
+        self._discard_controller_exit_request()
         self._resultReady.connect(self._accept_result)
+        self._updateResultReady.connect(self._accept_update_result)
         if auto_start:
             QTimer.singleShot(0, self.ensureCore)
+            QTimer.singleShot(800, self.refreshUpdateStatus)
+            self._update_timer = QTimer(self)
+            self._update_timer.setInterval(1500)
+            self._update_timer.timeout.connect(self.refreshUpdateStatus)
+            self._update_timer.start()
 
     @Property(bool, notify=connectedChanged)
     def connected(self) -> bool:
@@ -72,9 +90,80 @@ class CoreBridge(QObject):
     def message(self) -> str:
         return self._message
 
+    @Property(str, notify=updateStatusChanged)
+    def updateStatusJson(self) -> str:
+        return self._update_status_json
+
     @Property(bool, notify=stateJsonChanged)
     def activeOutputs(self) -> bool:
         return self._has_active_outputs()
+
+    def _publish_update_status(self, status: dict) -> None:
+        status = {
+            **status,
+            "launchedVersion": str(status.get("launchedVersion") or launched_version()),
+        }
+        serialized = json.dumps(status)
+        if serialized == self._update_status_json:
+            return
+        self._update_status = status
+        self._update_status_json = serialized
+        self.updateStatusChanged.emit()
+
+    @Slot()
+    def refreshUpdateStatus(self) -> None:
+        if self._update_refresh_running:
+            return
+        self._update_refresh_running = True
+        threading.Thread(target=self._update_status_worker, daemon=True, name="update-status").start()
+
+    def _update_status_worker(self) -> None:
+        try:
+            result = {"operation": "status", "status": read_update_status()}
+        except Exception as error:
+            result = {"operation": "status", "error": str(error)}
+        self._updateResultReady.emit(result)
+
+    @Slot()
+    def updateAction(self) -> None:
+        operation = "apply" if str(self._update_status.get("state") or "") == "ready" else "check"
+        if operation == "apply" and self._has_active_outputs():
+            self._set_message("Stop all streams and recordings before installing the ready update")
+            return
+        if operation == "check":
+            self._publish_update_status({**self._update_status, "state": "checking", "error": ""})
+        threading.Thread(
+            target=self._update_action_worker,
+            args=(operation,),
+            daemon=True,
+            name=f"update-{operation}",
+        ).start()
+
+    def _update_action_worker(self, operation: str) -> None:
+        try:
+            if operation == "apply":
+                request_update_apply(os.getpid())
+            else:
+                request_update_check()
+            result = {"operation": operation, "status": read_update_status()}
+        except Exception as error:
+            result = {"operation": operation, "error": str(error)}
+        self._updateResultReady.emit(result)
+
+    @Slot(object)
+    def _accept_update_result(self, result: object) -> None:
+        self._update_refresh_running = False
+        response = result if isinstance(result, dict) else {"error": "Invalid updater response"}
+        error = str(response.get("error") or "").strip()
+        if error:
+            self._publish_update_status({**self._update_status, "state": "error", "error": error})
+            return
+        status = response.get("status")
+        if isinstance(status, dict):
+            self._publish_update_status(status)
+        if response.get("operation") == "apply":
+            self._set_message("Installing the ready update and restarting RebornBroadcaster…")
+            self.requestExit()
 
     @Slot()
     def ensureCore(self) -> None:
@@ -242,6 +331,13 @@ class CoreBridge(QObject):
         quiet = bool(response.pop("_quiet", False))
         core_stopped = bool(response.pop("_core_stopped", False))
         exit_after = bool(response.pop("_exit_after", False))
+        if response.get("type") == "error" and self._consume_controller_exit_request():
+            self._set_connected(False)
+            self._set_compatible(False)
+            self._set_busy(False)
+            self._set_message("K-os Radio Broadcaster stopped the broadcast core")
+            self.exitReady.emit()
+            return
         if core_stopped and response.get("type") != "error":
             state = response.get("state")
             if isinstance(state, dict):
@@ -313,6 +409,25 @@ class CoreBridge(QObject):
                     self._set_message(f"{command.replace('-', ' ').title()} completed")
         if not quiet:
             self._set_busy(False)
+
+    @staticmethod
+    def _discard_controller_exit_request() -> None:
+        try:
+            controller_exit_request_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _consume_controller_exit_request() -> bool:
+        request_path = controller_exit_request_path()
+        try:
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            request_path.unlink(missing_ok=True)
+            source = str(request.get("source") or "").lower()
+            requested = str(request.get("requestedAt") or "")
+            return "kosradio" in source.replace("-", "").replace(" ", "") and bool(requested)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
 
     def _start_core_with_retries(self) -> None:
         try:

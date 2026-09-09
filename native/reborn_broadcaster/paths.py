@@ -41,6 +41,10 @@ def settings_path() -> Path:
     return candidates[0]
 
 
+def controller_exit_request_path() -> Path:
+    return settings_path().parent / "controller-exit-request.json"
+
+
 def bundled_ffmpeg() -> Path | None:
     roots = [resource_root(), resource_root().parent]
     patterns = (

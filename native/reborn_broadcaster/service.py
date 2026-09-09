@@ -12,6 +12,7 @@ from . import __version__
 from .audio_engine import EngineError, IcecastAudioEngine, RecordingEngine
 from .icecast_control import IcecastControl
 from .obs_adapter import ObsController, ObsError, find_obs
+from .paths import controller_exit_request_path
 from .settings import SettingsError, SettingsStore
 
 
@@ -112,7 +113,8 @@ class BroadcastService:
 
     async def execute(self, command: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = payload or {}
-        normalized = command.strip().lower()
+        requested = command.strip().lower()
+        normalized = requested
         normalized = {"close-app": "stop-core", "open-app": "get-state"}.get(normalized, normalized)
         async with self._command_lock:
             if normalized in {"get-state", "request-state", "status"}:
@@ -169,9 +171,24 @@ class BroadcastService:
                 await self.shutdown()
                 return {"ok": True, "shutdown": True, "state": self.snapshot()}
             if normalized == "stop-core":
+                if requested == "close-app":
+                    self._request_controller_exit(str(payload.get("source") or "API client"))
                 await self.shutdown()
                 return {"ok": True, "shutdown": True, "state": self.snapshot()}
             raise ValueError(f"Unknown command: {command}")
+
+    def _request_controller_exit(self, source: str) -> None:
+        try:
+            destination = controller_exit_request_path()
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps({"source": source[:80], "requestedAt": self._timestamp(), "corePid": os.getpid()}),
+                encoding="utf-8",
+            )
+            temporary.replace(destination)
+        except OSError:
+            pass
 
     def _save_settings(self, incoming: Any, merge: bool) -> dict[str, Any]:
         if not isinstance(incoming, dict):

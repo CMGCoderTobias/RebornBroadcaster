@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 from . import __version__
 from .bridge import CoreBridge
 from .paths import is_packaged, resource_root
-from .updater_health import report_candidate_health
+from .updater_health import check_for_updates_in_background, report_candidate_health
 
 INSTANCE_SERVER_NAME = f"RebornEntertainment.RebornBroadcaster.Controller.{__version__}"
 
@@ -136,6 +136,8 @@ def main() -> int:
     if not engine.rootObjects():
         return 1
     window = engine.rootObjects()[0]
+    if not automated:
+        QTimer.singleShot(2500, check_for_updates_in_background)
     tray = None
 
     def exit_controller() -> None:

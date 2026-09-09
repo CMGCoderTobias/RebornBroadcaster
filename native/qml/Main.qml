@@ -16,10 +16,11 @@ ApplicationWindow {
     flags: Qt.Window | Qt.FramelessWindowHint
 
     property int page: 0
-    property int settingsPage: 1
+    property int settingsPage: 0
     property var backend: core
     property var state: ({})
     property var settings: ({})
+    property var updateStatus: ({ "state": "idle", "launchedVersion": "", "latestVersion": "" })
     property bool coreConnected: Boolean(backend && backend.connected)
     property bool coreBusy: Boolean(backend && backend.busy)
     property string coreMessage: backend ? backend.message : "Controller is closing…"
@@ -88,6 +89,28 @@ ApplicationWindow {
         } catch (_) {}
     }
 
+    function applyUpdateStatus() {
+        try {
+            if (backend) updateStatus = JSON.parse(backend.updateStatusJson || "{}")
+        } catch (_) {
+            updateStatus = ({ "state": "error", "error": "Update status unavailable" })
+        }
+    }
+
+    function updateStatusText() {
+        let stateName = updateStatus.state || "idle"
+        let launched = updateStatus.launchedVersion || "unknown"
+        let latest = updateStatus.latestVersion || "not checked"
+        if (stateName === "checking") return "Launched version " + launched + "  •  Checking for the latest version…"
+        if (stateName === "available") return "Launched version " + launched + "  •  Latest version " + latest + "  •  Update found"
+        if (stateName === "downloading") return "Launched version " + launched + "  •  Latest version " + latest + "  •  Downloading update…"
+        if (stateName === "ready") return "Launched version " + launched + "  •  Latest version " + latest + "  •  Update ready"
+        if (stateName === "installing" || stateName === "awaitingHealth") return "Launched version " + launched + "  •  Latest version " + latest + "  •  Installing update…"
+        if (stateName === "upToDate") return "Launched version " + launched + "  •  Latest version " + (updateStatus.latestVersion || launched) + "  •  Up to date"
+        if (stateName === "error" || stateName === "unavailable") return "Launched version " + launched + "  •  " + (updateStatus.error || "Updater unavailable")
+        return "Launched version " + launched + "  •  Latest version " + latest
+    }
+
     function saveSettings() {
         if (!backend) return
         backend.saveSettings(JSON.stringify({
@@ -130,6 +153,7 @@ ApplicationWindow {
         applyState()
         if (backend) backend.loadSettings()
         addLog("RebornBroadcaster native controller started")
+        applyUpdateStatus()
     }
 
     onRadioLiveChanged: { if (!radioLive) liveSeconds = 0 }
@@ -140,6 +164,7 @@ ApplicationWindow {
         function onStateJsonChanged() { window.applyState() }
         function onSettingsJsonChanged() { window.applySettings() }
         function onMessageChanged() { window.addLog(window.coreMessage) }
+        function onUpdateStatusChanged() { window.applyUpdateStatus() }
     }
 
     Timer { interval: 1000; repeat: true; running: window.radioLive; onTriggered: window.liveSeconds++ }
@@ -482,6 +507,35 @@ ApplicationWindow {
                             Layout.fillWidth: true; Layout.fillHeight: true
 
                             ColumnLayout {
+                                Text { text: "Application Updates"; color: "white"; font.pixelSize: 21; font.bold: true }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    implicitHeight: 82
+                                    radius: 7
+                                    color: "#181818"
+                                    border.color: window.updateStatus.state === "ready" ? "#d7a72f"
+                                                : window.updateStatus.state === "error" || window.updateStatus.state === "unavailable" ? "#a73734"
+                                                : "#444444"
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 12
+                                        spacing: 14
+                                        BlueButton {
+                                            text: window.updateStatus.state === "ready" ? "Install and Restart" : "Check Now"
+                                            enabled: ["checking", "available", "downloading", "installing", "awaitingHealth"].indexOf(window.updateStatus.state) < 0
+                                            onClicked: { if (window.backend) window.backend.updateAction() }
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: window.updateStatusText()
+                                            color: window.updateStatus.state === "ready" ? "#ffd166"
+                                                 : window.updateStatus.state === "error" || window.updateStatus.state === "unavailable" ? "#ff8a80"
+                                                 : "#bdbdbd"
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+                                }
+                                Rectangle { Layout.fillWidth: true; height: 1; color: "#444444" }
                                 Text { text: "Broadcast Status"; color: "white"; font.pixelSize: 21; font.bold: true }
                                 TextArea {
                                     Layout.fillWidth: true; Layout.fillHeight: true; readOnly: true
