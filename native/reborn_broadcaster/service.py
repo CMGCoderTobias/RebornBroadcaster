@@ -9,7 +9,13 @@ from typing import Any, Callable
 from pathlib import Path
 
 from . import __version__
-from .audio_engine import EngineError, IcecastAudioEngine, RecordingEngine
+from .audio_engine import (
+    EngineError,
+    IcecastAudioEngine,
+    RecordingEngine,
+    list_audio_sources,
+    voicemeeter_source_for_route,
+)
 from .icecast_control import IcecastControl
 from .obs_adapter import ObsController, ObsError, find_obs
 from .paths import controller_exit_request_path
@@ -121,6 +127,14 @@ class BroadcastService:
                 return {"ok": True, "state": self.snapshot()}
             if normalized == "get-settings":
                 return {"ok": True, "settings": deepcopy(self.settings)}
+            if normalized == "list-audio-sources":
+                return {"ok": True, "audioSources": await asyncio.to_thread(list_audio_sources)}
+            if normalized == "select-audio-source":
+                route = str(payload.get("route") or "").strip().upper()
+                sources = await asyncio.to_thread(list_audio_sources)
+                source = voicemeeter_source_for_route(route, sources)
+                result = self._save_settings({"audioSourceId": source, "audioSourceName": source}, True)
+                return {**result, "audioSource": source, "route": route}
             if normalized == "save-settings":
                 return self._save_settings(payload.get("settings", payload), payload.get("merge", True))
             if normalized == "export-config":
@@ -393,6 +407,9 @@ class BroadcastService:
             await self.obs.connect(self.settings, launch_if_needed=False)
             status = await self.obs.stream_status()
             self._engine_state("video", {"installed": bool(executable) or not local, "connected": True, "status": "live" if status.get("outputActive") else "ready", "error": ""})
+        except Exception as error:
+            self._engine_state("video", {"installed": bool(executable) or not local, "connected": False, "status": "error", "error": str(error)})
+            raise
         finally:
             await self.obs.close()
         self._engine_state("video", {"connected": False, "status": "live" if status.get("outputActive") else "ready"})

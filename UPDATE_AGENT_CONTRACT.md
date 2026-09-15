@@ -5,7 +5,7 @@ RebornBroadcaster uses the current RebornUpdateAgent build as its framework-neut
 ## Identity
 
 - App ID: `rebornbroadcaster`
-- Current app version: `0.1.8`
+- Current app version: `0.2.0`
 - Production manifest: `https://kosradio.com/security/v1/updates/rebornbroadcaster/manifest`
 - Windows runtime: `win-x64`
 - Package entry point: `RebornBroadcaster.exe`

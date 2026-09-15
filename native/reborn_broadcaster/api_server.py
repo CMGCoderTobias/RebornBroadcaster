@@ -10,7 +10,9 @@ from .service import BroadcastService
 
 
 class CoreApiServer:
-    READ_ONLY_COMMANDS = {"get-state", "request-state", "status", "get-settings", "update-status"}
+    READ_ONLY_COMMANDS = {
+        "get-state", "request-state", "status", "get-settings", "list-audio-sources", "update-status"
+    }
 
     def __init__(self, service: BroadcastService, host: str = "127.0.0.1", port: int = 8010) -> None:
         self.service = service

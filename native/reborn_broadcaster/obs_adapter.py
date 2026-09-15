@@ -16,6 +16,10 @@ class ObsError(RuntimeError):
     pass
 
 
+class ObsUnavailableError(ObsError):
+    pass
+
+
 def find_obs(configured_path: str = "") -> Path | None:
     candidates: list[Path] = []
     if configured_path:
@@ -46,9 +50,13 @@ class ObsController:
         try:
             await self._open(settings)
             return
-        except Exception as first_error:
+        except ObsUnavailableError:
             if not launch_if_needed:
-                raise ObsError(f"OBS is not reachable: {first_error}") from first_error
+                raise
+        except ObsError:
+            raise
+        except Exception as error:
+            raise ObsError(f"OBS WebSocket connection failed: {error}") from error
         executable = find_obs(str(settings.get("obsExePath", "")))
         if not executable:
             raise ObsError("OBS Studio is not installed or its executable was not found")
@@ -63,18 +71,27 @@ class ObsController:
             try:
                 await self._open(settings)
                 return
-            except Exception as error:
+            except ObsUnavailableError as error:
                 last_error = error
+            except ObsError:
+                raise
         raise ObsError(f"OBS started but its WebSocket server is not reachable: {last_error}")
 
     async def _open(self, settings: dict[str, Any]) -> None:
         try:
-            import websockets
+            from websockets.asyncio.client import connect as websocket_connect
         except ImportError as error:
-            raise ObsError("The websockets package is required for OBS control") from error
-        host = str(settings.get("obsHost") or "127.0.0.1")
+            raise ObsError("The OBS WebSocket client is missing from this build") from error
+        host = str(settings.get("obsHost") or "127.0.0.1").strip()
         port = int(settings.get("obsPort") or 4455)
-        socket = await asyncio.wait_for(websockets.connect(f"ws://{host}:{port}"), timeout=3)
+        endpoint = f"ws://{host}:{port}"
+        try:
+            socket = await asyncio.wait_for(websocket_connect(endpoint), timeout=3)
+        except (OSError, TimeoutError) as error:
+            raise ObsUnavailableError(
+                f"No OBS WebSocket server answered at {endpoint}. "
+                "Enable it in OBS under Tools > WebSocket Server Settings and confirm the port."
+            ) from error
         try:
             hello = json.loads(await asyncio.wait_for(socket.recv(), timeout=3))
             if hello.get("op") != 0:
@@ -87,7 +104,13 @@ class ObsController:
                     raise ObsError("OBS WebSocket requires a password")
                 identify["authentication"] = self._authentication(password, authentication)
             await socket.send(json.dumps({"op": 1, "d": identify}))
-            identified = json.loads(await asyncio.wait_for(socket.recv(), timeout=3))
+            try:
+                identified_message = await asyncio.wait_for(socket.recv(), timeout=3)
+            except Exception as error:
+                if getattr(error, "code", None) == 4009:
+                    raise ObsError("OBS WebSocket password was rejected") from error
+                raise
+            identified = json.loads(identified_message)
             if identified.get("op") != 2:
                 raise ObsError("OBS WebSocket authentication failed")
             self._socket = socket

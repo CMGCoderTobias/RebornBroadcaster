@@ -20,6 +20,7 @@ ApplicationWindow {
     property var backend: core
     property var state: ({})
     property var settings: ({})
+    property var audioSources: []
     property var updateStatus: ({ "state": "idle", "launchedVersion": "", "latestVersion": "" })
     property bool coreConnected: Boolean(backend && backend.connected)
     property bool coreBusy: Boolean(backend && backend.busy)
@@ -75,7 +76,9 @@ ApplicationWindow {
             nowPlayingFileEnabled.checked = settings.nowPlayingFileEnabled === true
             nowPlayingFileField.text = settings.nowPlayingFile || ""
             encodingCombo.currentIndex = Math.max(0, encodingCombo.model.indexOf(settings.encodingType || "mp3"))
-            sourceField.text = settings.audioSourceName || ""
+            sourceCombo.savedSource = settings.audioSourceName || ""
+            sourceCombo.model = audioSourceChoices()
+            sourceCombo.currentIndex = Math.max(0, sourceCombo.model.indexOf(sourceCombo.savedSource))
             bitrateField.value = Number(settings.bitrate || 128)
             recordingField.text = settings.recordingPath || ""
             adaptiveEnabled.checked = settings.adaptiveBackoffEnabled !== false
@@ -87,6 +90,14 @@ ApplicationWindow {
             obsPasswordField.text = settings.obsPassword || ""
             obsPathField.text = settings.obsExePath || ""
         } catch (_) {}
+    }
+
+    function audioSourceChoices() {
+        let choices = audioSources ? audioSources.slice() : []
+        let saved = sourceCombo ? sourceCombo.savedSource : ""
+        if (saved && choices.indexOf(saved) < 0) choices.unshift(saved)
+        if (choices.length === 0) choices.push("No Windows audio sources found")
+        return choices
     }
 
     function applyUpdateStatus() {
@@ -125,7 +136,9 @@ ApplicationWindow {
             nowPlayingFileEnabled: nowPlayingFileEnabled.checked,
             nowPlayingFile: nowPlayingFileField.text,
             encodingType: encodingCombo.currentText,
-            audioSourceName: sourceField.text, bitrate: bitrateField.value,
+            audioSourceName: sourceCombo.currentText === "No Windows audio sources found" ? "" : sourceCombo.currentText,
+            audioSourceId: sourceCombo.currentText === "No Windows audio sources found" ? "" : sourceCombo.currentText,
+            bitrate: bitrateField.value,
             recordingPath: recordingField.text, adaptiveBackoffEnabled: adaptiveEnabled.checked,
             icecastEnabled: icecastEnabled.checked, obsEnabled: obsEnabled.checked,
             obsAutoLaunch: obsAutoLaunch.checked, obsHost: obsHostField.text,
@@ -151,7 +164,10 @@ ApplicationWindow {
 
     Component.onCompleted: {
         applyState()
-        if (backend) backend.loadSettings()
+        if (backend) {
+            backend.loadSettings()
+            backend.refreshAudioSources()
+        }
         addLog("RebornBroadcaster native controller started")
         applyUpdateStatus()
     }
@@ -163,6 +179,11 @@ ApplicationWindow {
         ignoreUnknownSignals: true
         function onStateJsonChanged() { window.applyState() }
         function onSettingsJsonChanged() { window.applySettings() }
+        function onAudioSourcesJsonChanged() {
+            try { window.audioSources = JSON.parse(window.backend.audioSourcesJson || "[]") } catch (_) { window.audioSources = [] }
+            sourceCombo.model = window.audioSourceChoices()
+            sourceCombo.currentIndex = Math.max(0, sourceCombo.model.indexOf(sourceCombo.savedSource))
+        }
         function onMessageChanged() { window.addLog(window.coreMessage) }
         function onUpdateStatusChanged() { window.applyUpdateStatus() }
     }
@@ -602,7 +623,19 @@ ApplicationWindow {
                                     width: parent.width - 14; spacing: 14
                                     Text { text: "Audio Encoding"; color: "white"; font.pixelSize: 21; font.bold: true }
                                     SettingGroup { FieldLabel { text: "Encoding" } ComboBox { id: encodingCombo; Layout.fillWidth: true; model: ["mp3", "aac", "opus", "vorbis"] } }
-                                    SettingGroup { FieldLabel { text: "Audio source name" } DarkField { id: sourceField; placeholderText: "VoiceMeeter Output (VB-Audio VoiceMeeter VAIO)" } }
+                                    SettingGroup {
+                                        FieldLabel { text: "Audio source" }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            ComboBox {
+                                                id: sourceCombo
+                                                property string savedSource: ""
+                                                Layout.fillWidth: true
+                                                model: ["No Windows audio sources found"]
+                                            }
+                                            BlueButton { text: "Refresh"; onClicked: { if (window.backend) window.backend.refreshAudioSources() } }
+                                        }
+                                    }
                                     SettingGroup { FieldLabel { text: "Bitrate (kbps)" } SpinBox { id: bitrateField; Layout.fillWidth: true; from: 8; to: 2048; value: 128; editable: true } }
                                     CheckBox { id: adaptiveEnabled; text: "Safely back off after sustained encoder lag"; checked: true; palette.windowText: "white" }
                                     Text { text: "The media core backs off only after sustained lag. Recording and OBS remain isolated from Icecast recovery."; color: "#bbbbbb"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
@@ -623,15 +656,43 @@ ApplicationWindow {
                                     width: parent.width - 14; spacing: 12
                                     Text { text: "ScrollBytes Live / OBS"; color: "white"; font.pixelSize: 21; font.bold: true }
                                     Rectangle {
-                                        Layout.fillWidth: true; implicitHeight: 62; radius: 7; color: "#181818"; border.color: "#444444"
+                                        Layout.fillWidth: true; implicitHeight: 78; radius: 7; color: "#181818"; border.color: "#444444"
                                         RowLayout {
                                             anchors.fill: parent; anchors.margins: 10
                                             ColumnLayout {
+                                                Layout.fillWidth: true
                                                 Text { text: state.outputs && state.outputs.video && state.outputs.video.installed ? "OBS Studio detected" : "OBS Studio not detected"; color: "white"; font.bold: true }
-                                                Text { text: "Video remains optional; Icecast audio works independently."; color: "#aaaaaa"; font.pixelSize: 12 }
+                                                Text {
+                                                    Layout.fillWidth: true
+                                                    text: state.outputs && state.outputs.video && state.outputs.video.status === "ready" ? "WebSocket connection test passed"
+                                                        : state.outputs && state.outputs.video && state.outputs.video.error ? state.outputs.video.error
+                                                        : "Video remains optional; Icecast audio works independently."
+                                                    color: state.outputs && state.outputs.video && state.outputs.video.status === "ready" ? "#55dd77" : "#aaaaaa"
+                                                    font.pixelSize: 12; wrapMode: Text.WordWrap
+                                                }
                                             }
-                                            Item { Layout.fillWidth: true }
                                             BlueButton { text: "Detect OBS"; onClicked: { if (window.backend) window.backend.detectObs() } }
+                                        }
+                                    }
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        implicitHeight: obsSetupColumn.implicitHeight + 24
+                                        radius: 7; color: "#202020"; border.color: "#3f78a8"
+                                        ColumnLayout {
+                                            id: obsSetupColumn
+                                            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                                            anchors.margins: 12; spacing: 7
+                                            Text { text: "OBS Setup"; color: "white"; font.pixelSize: 16; font.bold: true }
+                                            Text { Layout.fillWidth: true; text: "1. Download and install OBS Studio. OBS 28 or newer already includes obs-websocket."; color: "#dddddd"; wrapMode: Text.WordWrap }
+                                            Text { Layout.fillWidth: true; text: "2. In OBS, open Tools > WebSocket Server Settings. Enable the server, keep authentication enabled, choose a password, confirm the port (normally 4455), and apply the changes."; color: "#dddddd"; wrapMode: Text.WordWrap }
+                                            Text { Layout.fillWidth: true; text: "3. Below, use host 127.0.0.1 for local OBS, enter the matching port and password, then select Test OBS Connection and Save Settings."; color: "#dddddd"; wrapMode: Text.WordWrap }
+                                            Text { Layout.fillWidth: true; text: "4. Configure your streaming service, stream key, video output, and OBS recording profile inside OBS under Settings. RebornBroadcaster controls the configured OBS stream and recording; it does not replace those OBS settings."; color: "#b9d9f5"; wrapMode: Text.WordWrap }
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                BlueButton { text: "Download OBS Studio"; onClicked: Qt.openUrlExternally("https://obsproject.com/download") }
+                                                Item { Layout.fillWidth: true }
+                                                Text { text: "Official OBS Project download"; color: "#999999"; font.pixelSize: 11 }
+                                            }
                                         }
                                     }
                                     CheckBox { id: icecastEnabled; text: "Enable Icecast radio output"; checked: true; palette.windowText: "white" }

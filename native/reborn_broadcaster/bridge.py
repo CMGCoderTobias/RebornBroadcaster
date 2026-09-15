@@ -27,6 +27,7 @@ class CoreBridge(QObject):
     busyChanged = Signal()
     stateJsonChanged = Signal()
     settingsJsonChanged = Signal()
+    audioSourcesJsonChanged = Signal()
     messageChanged = Signal()
     updateStatusChanged = Signal()
     exitReady = Signal()
@@ -45,6 +46,7 @@ class CoreBridge(QObject):
         self._busy = False
         self._state_json = "{}"
         self._settings_json = "{}"
+        self._audio_sources_json = "[]"
         self._message = "Connecting to broadcast core…"
         self._update_status = {
             "state": "idle",
@@ -85,6 +87,10 @@ class CoreBridge(QObject):
     @Property(str, notify=settingsJsonChanged)
     def settingsJson(self) -> str:
         return self._settings_json
+
+    @Property(str, notify=audioSourcesJsonChanged)
+    def audioSourcesJson(self) -> str:
+        return self._audio_sources_json
 
     @Property(str, notify=messageChanged)
     def message(self) -> str:
@@ -183,6 +189,10 @@ class CoreBridge(QObject):
     @Slot()
     def loadSettings(self) -> None:
         self._run("get-settings", quiet=True)
+
+    @Slot()
+    def refreshAudioSources(self) -> None:
+        self._run("list-audio-sources", quiet=True)
 
     @Slot()
     def goLive(self) -> None:
@@ -383,6 +393,10 @@ class CoreBridge(QObject):
         if isinstance(settings, dict):
             self._settings_json = json.dumps(settings)
             self.settingsJsonChanged.emit()
+        audio_sources = response.get("audioSources")
+        if isinstance(audio_sources, list):
+            self._audio_sources_json = json.dumps([str(source) for source in audio_sources])
+            self.audioSourcesJsonChanged.emit()
         if response.get("type") == "error":
             self._set_message(str(response.get("error") or "Core request failed"))
         elif not quiet:

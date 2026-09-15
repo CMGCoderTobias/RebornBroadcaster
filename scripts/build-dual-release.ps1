@@ -30,6 +30,23 @@ try {
     if (-not $?) {
         throw 'The native release build failed.'
     }
+
+    $codingRoot = Split-Path -Parent (Split-Path -Parent $projectRoot)
+    $installerBuilder = Join-Path $codingRoot 'RebornUpdateAgent\scripts\New-RebornAppInstaller.ps1'
+    & $installerBuilder `
+        -AppId 'rebornbroadcaster' `
+        -DisplayName 'RebornBroadcaster' `
+        -AppVersion $Version `
+        -InstallDirectoryName 'rebornbroadcaster' `
+        -AppConfig (Join-Path $projectRoot 'updater\rebornbroadcaster.app.json') `
+        -BootstrapConfig (Join-Path $projectRoot 'updater\agent-bootstrap.json') `
+        -LauncherConfig (Join-Path $projectRoot 'updater\reborn-launch.json') `
+        -InstalledLauncherName 'RebornBroadcasterLauncher.exe' `
+        -OutputPath (Join-Path $projectRoot "release-installers\RebornBroadcaster-Setup-$Version.exe") `
+        -Runtime $Runtime
+    if (-not $?) {
+        throw 'The standalone installer build failed.'
+    }
 } finally {
     Pop-Location
 }

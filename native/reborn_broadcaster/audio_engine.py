@@ -17,6 +17,7 @@ from .paths import bundled_ffmpeg
 StateCallback = Callable[[str, dict[str, Any]], None]
 SPEED_PATTERN = re.compile(r"^speed=\s*([0-9.]+)x?$")
 PROGRESS_PATTERN = re.compile(r"^[a-z_]+=.*$", re.IGNORECASE)
+DSHOW_AUDIO_PATTERN = re.compile(r'^\[dshow[^]]*\]\s+"(.+)"\s+\(audio\)$')
 
 
 def _subprocess_options() -> dict[str, int]:
@@ -27,6 +28,54 @@ def _subprocess_options() -> dict[str, int]:
 
 class EngineError(RuntimeError):
     pass
+
+
+def list_audio_sources() -> list[str]:
+    ffmpeg = bundled_ffmpeg()
+    if not ffmpeg:
+        raise EngineError("FFmpeg was not found")
+    if sys.platform != "win32":
+        return []
+    try:
+        result = subprocess.run(
+            [str(ffmpeg), "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+            **_subprocess_options(),
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise EngineError(f"Unable to discover audio sources: {error}") from error
+    sources: list[str] = []
+    for line in result.stderr.splitlines():
+        match = DSHOW_AUDIO_PATTERN.match(line.strip())
+        if match and match.group(1) not in sources:
+            sources.append(match.group(1))
+    return sources
+
+
+def voicemeeter_source_for_route(route: str, sources: list[str]) -> str:
+    route = route.strip().upper()
+    patterns = {
+        "B1": ("voicemeeter out b1", "voicemeeter output"),
+        "B2": ("voicemeeter out b2", "voicemeeter aux output"),
+        "B3": ("voicemeeter out b3", "voicemeeter vaio3 output"),
+    }
+    for pattern in patterns.get(route, ()):
+        for source in sources:
+            normalized = source.casefold()
+            if pattern in normalized:
+                if route == "B1" and pattern == "voicemeeter output" and any(
+                    value in normalized for value in ("aux", "vaio3")
+                ):
+                    continue
+                return source
+    expected = {"B1": "VoiceMeeter Output", "B2": "VoiceMeeter Aux Output", "B3": "VoiceMeeter VAIO3 Output"}.get(route)
+    if expected:
+        raise EngineError(f"{expected} was not found in the available Windows audio sources")
+    raise EngineError(f"VoiceMeeter route {route or '(empty)'} is not a supported stream output")
 
 
 def _input_arguments(settings: dict[str, Any]) -> list[str]:
