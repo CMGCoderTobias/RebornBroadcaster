@@ -14,7 +14,7 @@ actual="$("$venv/bin/python" -c 'from reborn_broadcaster import __version__; pri
 [[ "$actual" == "$version" ]] || { echo "Native version $actual does not match $version" >&2; exit 3; }
 rm -rf "$deployment" "$package"
 mkdir -p "$(dirname "$package")"
-"$venv/bin/python" -m nuitka "$native_root/launcher.py" --standalone --enable-plugin=pyside6 --output-dir="$deployment" --output-filename=RebornBroadcaster --assume-yes-for-downloads --noinclude-qt-translations --include-data-files="$native_root/qml/Main.qml=qml/Main.qml" --include-qt-plugins=platforminputcontexts,qml,qmllint,qmltooling,vectorimageformats --noinclude-dlls=Qt6Charts* --noinclude-dlls=Qt6Sensors* --noinclude-dlls=Qt6WebEngine*
+"$venv/bin/python" -m nuitka "$native_root/launcher.py" --standalone --enable-plugin=pyside6 --output-dir="$deployment" --output-filename=RebornBroadcaster --assume-yes-for-downloads --noinclude-qt-translations --include-data-files="$native_root/qml/Main.qml=qml/Main.qml" --include-qt-plugins=platforminputcontexts,qmltooling,vectorimageformats --noinclude-dlls=Qt6Charts* --noinclude-dlls=Qt6Sensors* --noinclude-dlls=Qt6WebEngine*
 generated="$(find "$deployment" -maxdepth 1 -type d \( -name 'launcher.dist' -o -name 'RebornBroadcaster.dist' \) -print -quit)"
 [[ -n "$generated" ]] || { echo "Nuitka output was not found" >&2; exit 4; }
 mv "$generated" "$package"
