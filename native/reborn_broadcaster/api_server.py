@@ -92,9 +92,12 @@ class CoreApiServer:
                 response = f"Stream: {'ON' if radio == 'live' else 'OFF'} | Recording: {'ON' if recording == 'recording' else 'OFF'}"
             else:
                 response = json.dumps({"type": "result", "command": command, **result}, separators=(",", ":"))
-            await self._write(writer, response, encoding)
-            if result.get("shutdown"):
-                self.shutdown_requested.set()
+            should_shutdown = bool(result.get("shutdown"))
+            try:
+                await self._write(writer, response, encoding)
+            finally:
+                if should_shutdown:
+                    self.shutdown_requested.set()
         except Exception as error:
             await self._write(writer, json.dumps({"type": "error", "command": command, "error": str(error)}), encoding)
 
@@ -125,9 +128,12 @@ class CoreApiServer:
                 response["activity"] = self.service.record_command_activity(
                     command, source, "failed", str(error)
                 )
-        await self._write(writer, json.dumps(response, separators=(",", ":")), encoding)
-        if response.get("shutdown"):
-            self.shutdown_requested.set()
+        should_shutdown = bool(response.get("shutdown"))
+        try:
+            await self._write(writer, json.dumps(response, separators=(",", ":")), encoding)
+        finally:
+            if should_shutdown:
+                self.shutdown_requested.set()
 
     @staticmethod
     def _legacy_command(line: str) -> tuple[str, dict[str, Any]]:

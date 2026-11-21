@@ -21,10 +21,15 @@ ApplicationWindow {
     property var state: ({})
     property var settings: ({})
     property var audioSources: []
+    property string conversionFile: ""
     property var updateStatus: ({ "state": "idle", "launchedVersion": "", "latestVersion": "" })
     property bool coreConnected: Boolean(backend && backend.connected)
+    property bool coreCompatible: Boolean(backend && backend.compatible)
+    property bool coreStarting: Boolean(backend && backend.startingCore)
+    property bool coreReady: coreConnected && coreCompatible && !coreStarting
     property bool coreBusy: Boolean(backend && backend.busy)
     property string coreMessage: backend ? backend.message : "Controller is closing…"
+    property string coreVersion: state.core && state.core.version ? String(state.core.version) : ""
     property int outerMargin: width < 720 || height < 560 ? 16 : 38
     property int liveSeconds: 0
     property bool radioLive: radioStatus === "live"
@@ -203,6 +208,19 @@ ApplicationWindow {
     }
 
     FileDialog {
+        id: conversionFileDialog
+        title: "Select a recording to convert"
+        nameFilters: [
+            "Media files (*.mkv *.mp3 *.m4a *.aac *.ogg *.opus *.wav *.flac *.mp4 *.mov *.webm)",
+            "All files (*)"
+        ]
+        fileMode: FileDialog.OpenFile
+        onAccepted: {
+            if (window.backend) window.conversionFile = window.backend.localFilePath(selectedFile.toString())
+        }
+    }
+
+    FileDialog {
         id: importDialog
         title: "Import RebornBroadcaster configuration"
         nameFilters: ["JSON configuration (*.json)"]
@@ -374,7 +392,7 @@ ApplicationWindow {
                 ColumnLayout {
                     Layout.fillWidth: true; spacing: 6
                     Text {
-                        text: "Status: " + (window.radioLive || window.videoLive ? "Live" : window.coreConnected ? "Idle" : "Core Offline")
+                        text: "Status: " + (window.radioLive || window.videoLive ? "Live" : window.coreReady ? "Idle" : window.coreStarting ? "Core Starting" : "Core Offline")
                         color: "#333333"; font.pixelSize: 19; font.bold: true
                         horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true
                     }
@@ -409,12 +427,12 @@ ApplicationWindow {
                                 Layout.fillWidth: true; spacing: 8
                                 BlueButton {
                                     Layout.fillWidth: true; text: window.radioRunning ? "Stop Radio" : "Start Radio"
-                                    enabled: window.coreConnected && window.radioEnabled && !window.coreBusy; danger: window.radioRunning
+                                    enabled: !window.coreBusy && (window.radioRunning ? window.coreConnected : window.coreReady && window.radioEnabled); danger: window.radioRunning
                                     onClicked: { if (window.backend) window.radioRunning ? window.backend.stopRadio() : window.backend.startRadio() }
                                 }
                                 BlueButton {
                                     Layout.fillWidth: true; text: window.recordingRunning ? "Stop Audio Recording" : "Record Audio"
-                                    enabled: window.coreConnected && !window.coreBusy; danger: window.recordingRunning
+                                    enabled: !window.coreBusy && (window.recordingRunning ? window.coreConnected : window.coreReady); danger: window.recordingRunning
                                     onClicked: { if (window.backend) window.recordingRunning ? window.backend.stopRecording() : window.backend.startRecording() }
                                 }
                             }
@@ -437,12 +455,12 @@ ApplicationWindow {
                                 Layout.fillWidth: true; spacing: 8
                                 BlueButton {
                                     Layout.fillWidth: true; text: window.videoRunning ? "Stop Video" : "Start Video"
-                                    enabled: window.coreConnected && window.videoEnabled && !window.coreBusy; danger: window.videoRunning
+                                    enabled: !window.coreBusy && (window.videoRunning ? window.coreConnected : window.coreReady && window.videoEnabled); danger: window.videoRunning
                                     onClicked: { if (window.backend) window.videoRunning ? window.backend.stopVideo() : window.backend.startVideo() }
                                 }
                                 BlueButton {
                                     Layout.fillWidth: true; text: window.videoRecordingRunning ? "Stop Video Recording" : "Record Video"
-                                    enabled: window.coreConnected && window.videoEnabled && !window.coreBusy; danger: window.videoRecordingRunning
+                                    enabled: !window.coreBusy && (window.videoRecordingRunning ? window.coreConnected : window.coreReady && window.videoEnabled); danger: window.videoRecordingRunning
                                     onClicked: { if (window.backend) window.videoRecordingRunning ? window.backend.stopVideoRecording() : window.backend.startVideoRecording() }
                                 }
                             }
@@ -454,7 +472,7 @@ ApplicationWindow {
                     Layout.fillWidth: true; spacing: 10
                     BlueButton {
                         width: 190; text: window.radioRunning || window.videoRunning ? "Stop Streaming Outputs" : "Start All Enabled Outputs"
-                        enabled: window.coreConnected && !window.coreBusy; danger: window.radioRunning || window.videoRunning
+                        enabled: !window.coreBusy && (window.radioRunning || window.videoRunning ? window.coreConnected : window.coreReady); danger: window.radioRunning || window.videoRunning
                         onClicked: { if (window.backend) danger ? window.backend.stopLive() : window.backend.goLive() }
                     }
                     BlueButton { width: 120; text: "Settings"; onClicked: { window.page = 1; if (window.backend) window.backend.loadSettings() } }
@@ -480,13 +498,25 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     visible: window.height >= 540
-                    Text { text: window.coreConnected ? "Core connected on localhost:8010" : "Waiting for broadcast core…"; color: window.coreConnected ? "#218838" : "#a73734"; font.pixelSize: 12 }
+                    Text {
+                        text: window.coreStarting
+                            ? "Starting core; waiting for confirmation…"
+                            : window.coreReady
+                                ? "Core " + (window.coreVersion || "unknown") + " confirmed on localhost:8010"
+                                : window.coreConnected
+                                    ? "Core " + (window.coreVersion || "unknown") + " connected but not ready"
+                                    : "Broadcast core is offline"
+                        color: window.coreReady ? "#218838" : window.coreStarting ? "#b7791f" : "#a73734"
+                        font.pixelSize: 12
+                    }
                     Item { Layout.fillWidth: true }
                     Text { text: window.coreMessage; color: "#666666"; font.pixelSize: 12; elide: Text.ElideRight; Layout.maximumWidth: 450 }
                     BlueButton {
-                        text: window.coreConnected ? "Stop Core" : "Start Core"
+                        text: window.coreStarting ? "Starting Core…"
+                            : window.coreConnected ? (window.coreCompatible ? "Stop Core" : "Stop Old Core")
+                            : "Start Core"
                         danger: window.coreConnected
-                        enabled: !window.coreBusy
+                        enabled: !window.coreBusy && !window.coreStarting
                         onClicked: {
                             if (!window.backend) return
                             if (!window.coreConnected) window.backend.ensureCore()
@@ -621,8 +651,8 @@ ApplicationWindow {
                                 contentWidth: availableWidth
                                 ColumnLayout {
                                     width: parent.width - 14; spacing: 14
-                                    Text { text: "Audio Encoding"; color: "white"; font.pixelSize: 21; font.bold: true }
-                                    SettingGroup { FieldLabel { text: "Encoding" } ComboBox { id: encodingCombo; Layout.fillWidth: true; model: ["mp3", "aac", "opus", "vorbis"] } }
+                                    Text { text: "Stream & Recording Encoding"; color: "white"; font.pixelSize: 21; font.bold: true }
+                                    SettingGroup { FieldLabel { text: "Codec" } ComboBox { id: encodingCombo; Layout.fillWidth: true; model: ["mp3", "aac", "opus", "vorbis"] } }
                                     SettingGroup {
                                         FieldLabel { text: "Audio source" }
                                         RowLayout {
@@ -639,14 +669,68 @@ ApplicationWindow {
                                     SettingGroup { FieldLabel { text: "Bitrate (kbps)" } SpinBox { id: bitrateField; Layout.fillWidth: true; from: 8; to: 2048; value: 128; editable: true } }
                                     CheckBox { id: adaptiveEnabled; text: "Safely back off after sustained encoder lag"; checked: true; palette.windowText: "white" }
                                     Text { text: "The media core backs off only after sustained lag. Recording and OBS remain isolated from Icecast recovery."; color: "#bbbbbb"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#4a4a4a" }
+                                    Text { text: "Recording Converter"; color: "white"; font.pixelSize: 18; font.bold: true }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: "Convert an existing recording using the codec and bitrate selected above. The original file is never replaced."
+                                        color: "#bbbbbb"; wrapMode: Text.WordWrap
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        DarkField {
+                                            Layout.fillWidth: true
+                                            readOnly: true
+                                            text: window.conversionFile
+                                            placeholderText: "Choose an existing recording"
+                                        }
+                                        BlueButton { text: "Choose"; enabled: !window.backend.conversionBusy; onClicked: conversionFileDialog.open() }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        BlueButton {
+                                            Layout.fillWidth: true
+                                            text: window.backend.conversionBusy ? "Converting…" : "Convert to " + encodingCombo.currentText.toUpperCase()
+                                            enabled: window.conversionFile.length > 0
+                                                && !window.backend.conversionBusy
+                                                && !window.backend.activeOutputs
+                                            onClicked: window.backend.convertAudio(window.conversionFile, encodingCombo.currentText, bitrateField.value)
+                                        }
+                                        BlueButton {
+                                            text: "Cancel"
+                                            danger: true
+                                            visible: window.backend.conversionBusy
+                                            onClicked: window.backend.cancelConversion()
+                                        }
+                                        BlueButton {
+                                            text: "Open Folder"
+                                            visible: !window.backend.conversionBusy && window.backend.conversionOutput.length > 0
+                                            onClicked: window.backend.openConversionFolder()
+                                        }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: window.backend.activeOutputs
+                                            ? "Stop live streams and recordings before running the converter."
+                                            : window.backend.conversionMessage
+                                        color: window.backend.activeOutputs ? "#ffd166"
+                                            : window.backend.conversionMessage.indexOf("failed") >= 0 ? "#ff8a80" : "#9fc5e8"
+                                        wrapMode: Text.WordWrap
+                                    }
                                 }
                             }
 
                             ColumnLayout {
                                 Text { text: "Recording"; color: "white"; font.pixelSize: 21; font.bold: true }
-                                SettingGroup { FieldLabel { text: "Recording folder or .mkv file" } DarkField { id: recordingField; placeholderText: "Defaults to Music/RebornBroadcaster" } }
-                                Text { text: "Recordings use lossless FLAC audio in a resilient Matroska container and stop gracefully before the process exits."; color: "#bbbbbb"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                                BlueButton { Layout.fillWidth: true; text: window.recordingLive ? "Stop Recording" : "Start Recording"; danger: window.recordingLive; onClicked: { if (window.backend) window.recordingLive ? window.backend.stopRecording() : window.backend.startRecording() } }
+                                SettingGroup { FieldLabel { text: "Recording folder or audio filename" } DarkField { id: recordingField; placeholderText: "Defaults to Music/RebornBroadcaster" } }
+                                Text { text: "Radio recordings use the same codec and configured bitrate as the stream: MP3 creates .mp3, AAC creates .m4a, and Opus or Vorbis creates .ogg."; color: "#bbbbbb"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                                BlueButton {
+                                    Layout.fillWidth: true
+                                    text: window.recordingLive ? "Stop Recording" : "Start Recording"
+                                    danger: window.recordingLive
+                                    enabled: !window.coreBusy && (window.recordingLive ? window.coreConnected : window.coreReady)
+                                    onClicked: { if (window.backend) window.recordingLive ? window.backend.stopRecording() : window.backend.startRecording() }
+                                }
                                 Item { Layout.fillHeight: true }
                             }
 

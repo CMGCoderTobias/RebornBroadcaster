@@ -1,6 +1,4 @@
-param(
-    [string]$AgentRepository = ''
-)
+param([string]$AgentRepository = '')
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -8,24 +6,22 @@ if (-not $AgentRepository) {
     $codingRoot = Split-Path -Parent (Split-Path -Parent $projectRoot)
     $AgentRepository = Join-Path $codingRoot 'RebornUpdateAgent'
 }
-$agentRepository = [System.IO.Path]::GetFullPath($AgentRepository)
-$sourceRoot = Join-Path $AgentRepository 'artifacts\win-x64'
+$agentRepository = [IO.Path]::GetFullPath($AgentRepository)
 $destination = Join-Path $projectRoot 'updater-runtime'
-$bootstrap = Join-Path $sourceRoot 'bootstrap\RebornUpdateBootstrap.exe'
-$launcher = Join-Path $sourceRoot 'launcher\RebornAppLauncher.exe'
-
-foreach ($required in @($bootstrap, $launcher)) {
-    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
-        throw "Missing updater artifact: $required. Build RebornUpdateAgent win-x64 first."
-    }
-}
-
-if (Test-Path -LiteralPath $destination) {
-    Remove-Item -LiteralPath $destination -Recurse -Force
-}
-New-Item -ItemType Directory -Path $destination -Force | Out-Null
-Copy-Item -LiteralPath $bootstrap -Destination $destination
-Copy-Item -LiteralPath $launcher -Destination $destination
-Get-ChildItem -LiteralPath (Join-Path $projectRoot 'updater') -File | Copy-Item -Destination $destination
-
-Write-Host "Updater migration assets ready: $destination"
+$source = Join-Path $projectRoot 'updater'
+$version = [string](Get-Content -LiteralPath (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json).version
+if (Test-Path -LiteralPath $destination) { Remove-Item -LiteralPath $destination -Recurse -Force }
+& (Join-Path $agentRepository 'scripts\New-AppIntegrationBundle.ps1') `
+    -Runtime win-x64 `
+    -AppConfig (Join-Path $source 'rebornbroadcaster.app.json') `
+    -BootstrapConfig (Join-Path $source 'agent-bootstrap.json') `
+    -LauncherConfig (Join-Path $source 'reborn-launch.json') `
+    -AppVersion $version `
+    -OutputDirectory $destination
+if ($LASTEXITCODE -ne 0) { throw 'Universal Reborn updater integration bundle failed.' }
+Copy-Item -LiteralPath (Join-Path $destination 'app-config.json') -Destination (Join-Path $destination 'rebornbroadcaster.app.json')
+$testing = Get-Content -LiteralPath (Join-Path $source 'rebornbroadcaster.testing.app.json') -Raw | ConvertFrom-Json
+$testing.currentVersion = $version
+$testing | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $destination 'rebornbroadcaster.testing.app.json') -Encoding utf8NoBOM
+Copy-Item -LiteralPath (Join-Path $source 'agent-bootstrap.testing.json') -Destination $destination
+Write-Host "Universal updater integration prepared for RebornBroadcaster $version."

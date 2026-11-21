@@ -121,6 +121,7 @@ def main() -> int:
         _close_superseded_controllers()
 
     bridge = CoreBridge(auto_start=not automated)
+    app.aboutToQuit.connect(bridge.cancelConversion)
     health_reported = False
 
     def report_health_when_ready() -> None:

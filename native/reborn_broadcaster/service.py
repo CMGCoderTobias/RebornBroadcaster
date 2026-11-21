@@ -42,7 +42,14 @@ class BroadcastService:
                     "error": "",
                 },
             },
-            "recording": {"status": "stopped", "error": "", "path": ""},
+            "recording": {
+                "status": "stopped",
+                "error": "",
+                "path": "",
+                "format": "",
+                "sizeBytes": 0,
+                "coreVersion": __version__,
+            },
             "videoRecording": {"status": "stopped", "error": "", "path": ""},
             "listeners": None,
             "listenerStatus": "stopped",
@@ -187,8 +194,12 @@ class BroadcastService:
             if normalized == "stop-core":
                 if requested == "close-app":
                     self._request_controller_exit(str(payload.get("source") or "API client"))
-                await self.shutdown()
-                return {"ok": True, "shutdown": True, "state": self.snapshot()}
+                return {
+                    "ok": True,
+                    "shutdown": True,
+                    "shutdownAccepted": True,
+                    "state": self.snapshot(),
+                }
             raise ValueError(f"Unknown command: {command}")
 
     def _request_controller_exit(self, source: str) -> None:
@@ -362,8 +373,35 @@ class BroadcastService:
 
     async def _start_recording(self) -> dict[str, Any]:
         try:
+            self.settings = self.store.load()
+            encoding = str(self.settings.get("encodingType") or "mp3").strip().lower()
+            expected_format = {
+                "aac": "m4a",
+                "m4a": "m4a",
+                "opus": "ogg",
+                "ogg-opus": "ogg",
+                "vorbis": "ogg",
+                "ogg": "ogg",
+            }.get(encoding, "mp3")
+            self._engine_state(
+                "recording",
+                {
+                    "format": expected_format,
+                    "sizeBytes": 0,
+                    "coreVersion": __version__,
+                },
+            )
             path = await self.recording.start(self.settings)
-            return {"ok": True, "path": path, "state": self.snapshot()}
+            recording = deepcopy(self.state["recording"])
+            return {
+                "ok": True,
+                "path": path,
+                "format": recording.get("format"),
+                "sizeBytes": recording.get("sizeBytes", 0),
+                "coreVersion": __version__,
+                "recording": recording,
+                "state": self.snapshot(),
+            }
         except Exception as error:
             self._engine_state("recording", {"status": "error", "error": str(error)})
             raise

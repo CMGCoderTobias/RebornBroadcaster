@@ -11,13 +11,13 @@ from typing import Any, Callable
 from urllib.parse import quote
 
 from . import __version__
+from .audio_backends import AudioBackendError, AudioSource, current_audio_backend
 from .paths import bundled_ffmpeg
 
 
 StateCallback = Callable[[str, dict[str, Any]], None]
 SPEED_PATTERN = re.compile(r"^speed=\s*([0-9.]+)x?$")
 PROGRESS_PATTERN = re.compile(r"^[a-z_]+=.*$", re.IGNORECASE)
-DSHOW_AUDIO_PATTERN = re.compile(r'^\[dshow[^]]*\]\s+"(.+)"\s+\(audio\)$')
 
 
 def _subprocess_options() -> dict[str, int]:
@@ -34,59 +34,26 @@ def list_audio_sources() -> list[str]:
     ffmpeg = bundled_ffmpeg()
     if not ffmpeg:
         raise EngineError("FFmpeg was not found")
-    if sys.platform != "win32":
-        return []
     try:
-        result = subprocess.run(
-            [str(ffmpeg), "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=8,
-            **_subprocess_options(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise EngineError(f"Unable to discover audio sources: {error}") from error
-    sources: list[str] = []
-    for line in result.stderr.splitlines():
-        match = DSHOW_AUDIO_PATTERN.match(line.strip())
-        if match and match.group(1) not in sources:
-            sources.append(match.group(1))
-    return sources
+        return [source.source_id for source in current_audio_backend().list_sources(str(ffmpeg))]
+    except AudioBackendError as error:
+        raise EngineError(str(error)) from error
 
 
 def voicemeeter_source_for_route(route: str, sources: list[str]) -> str:
-    route = route.strip().upper()
-    patterns = {
-        "B1": ("voicemeeter out b1", "voicemeeter output"),
-        "B2": ("voicemeeter out b2", "voicemeeter aux output"),
-        "B3": ("voicemeeter out b3", "voicemeeter vaio3 output"),
-    }
-    for pattern in patterns.get(route, ()):
-        for source in sources:
-            normalized = source.casefold()
-            if pattern in normalized:
-                if route == "B1" and pattern == "voicemeeter output" and any(
-                    value in normalized for value in ("aux", "vaio3")
-                ):
-                    continue
-                return source
-    expected = {"B1": "VoiceMeeter Output", "B2": "VoiceMeeter Aux Output", "B3": "VoiceMeeter VAIO3 Output"}.get(route)
-    if expected:
-        raise EngineError(f"{expected} was not found in the available Windows audio sources")
-    raise EngineError(f"VoiceMeeter route {route or '(empty)'} is not a supported stream output")
+    backend = current_audio_backend()
+    available = [AudioSource(source, source) for source in sources]
+    try:
+        return backend.stream_source_for_route(route, available).source_id
+    except AudioBackendError as error:
+        raise EngineError(str(error)) from error
 
 
 def _input_arguments(settings: dict[str, Any]) -> list[str]:
-    source = str(settings.get("audioSourceName") or settings.get("audioSourceId") or "").strip()
-    if sys.platform == "win32":
-        if not source:
-            raise EngineError("Select an audio source before starting")
-        return ["-f", "dshow", "-i", f"audio={source}"]
-    if sys.platform == "darwin":
-        return ["-f", "avfoundation", "-i", source or ":0"]
-    return ["-f", "pulse", "-i", source or "default"]
+    try:
+        return current_audio_backend().input_arguments(settings)
+    except AudioBackendError as error:
+        raise EngineError(str(error)) from error
 
 
 def _codec_arguments(settings: dict[str, Any], bitrate: int) -> tuple[list[str], str, str]:
@@ -98,6 +65,31 @@ def _codec_arguments(settings: dict[str, Any], bitrate: int) -> tuple[list[str],
     if encoding in {"vorbis", "ogg"}:
         return ["-c:a", "libvorbis", "-b:a", f"{bitrate}k"], "ogg", "audio/ogg"
     return ["-c:a", "libmp3lame", "-b:a", f"{bitrate}k"], "mp3", "audio/mpeg"
+
+
+def _recording_codec_arguments(settings: dict[str, Any]) -> tuple[list[str], str, str]:
+    encoding = str(settings.get("encodingType") or "mp3").lower()
+    bitrate = int(settings.get("bitrate") or 128)
+    codec, stream_format, _content_type = _codec_arguments(settings, bitrate)
+    if encoding in {"aac", "m4a"}:
+        return codec, ".m4a", "ipod"
+    if stream_format == "ogg":
+        return codec, ".ogg", "ogg"
+    return codec, ".mp3", "mp3"
+
+
+def audio_conversion_plan(
+    source: Path, encoding: str, bitrate: int
+) -> tuple[Path, list[str], str]:
+    codec, extension, output_format = _recording_codec_arguments(
+        {"encodingType": encoding, "bitrate": bitrate}
+    )
+    output = source.with_name(f"{source.stem}-converted{extension}")
+    sequence = 2
+    while output.exists():
+        output = source.with_name(f"{source.stem}-converted-{sequence}{extension}")
+        sequence += 1
+    return output, codec, output_format
 
 
 class IcecastAudioEngine:
@@ -283,6 +275,10 @@ class RecordingEngine:
     def __init__(self, notify: StateCallback) -> None:
         self._notify = notify
         self._process: asyncio.subprocess.Process | None = None
+        self._monitor_task: asyncio.Task[None] | None = None
+        self._error_lines: deque[str] = deque(maxlen=8)
+        self._progress_event: asyncio.Event | None = None
+        self._stopping = False
         self.output_path = ""
 
     async def start(self, settings: dict[str, Any]) -> str:
@@ -291,42 +287,161 @@ class RecordingEngine:
         ffmpeg = bundled_ffmpeg()
         if not ffmpeg:
             raise EngineError("FFmpeg was not found")
+        codec, extension, output_format = _recording_codec_arguments(settings)
         destination = Path(str(settings.get("recordingPath") or Path.home() / "Music" / "RebornBroadcaster"))
         if destination.suffix:
-            output = destination.with_suffix(".mkv")
+            output = destination.with_suffix(extension)
         else:
             destination.mkdir(parents=True, exist_ok=True)
-            output = destination / f"broadcast-{datetime.now():%Y%m%d-%H%M%S}.mkv"
+            output = destination / f"broadcast-{datetime.now():%Y%m%d-%H%M%S}{extension}"
         output.parent.mkdir(parents=True, exist_ok=True)
         self.output_path = str(output)
-        self._notify("recording", {"status": "starting", "error": "", "path": self.output_path})
-        self._process = await asyncio.create_subprocess_exec(
-            str(ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "warning",
-            *_input_arguments(settings), "-c:a", "flac", "-f", "matroska", "-y", self.output_path,
+        self._error_lines.clear()
+        self._progress_event = asyncio.Event()
+        self._stopping = False
+        self._notify(
+            "recording",
+            {
+                "status": "starting",
+                "error": "",
+                "path": self.output_path,
+                "format": extension.lstrip("."),
+                "sizeBytes": 0,
+            },
+        )
+        process = await asyncio.create_subprocess_exec(
+            str(ffmpeg), "-hide_banner", "-loglevel", "warning",
+            *_input_arguments(settings), *codec, "-f", output_format,
+            "-progress", "pipe:2", "-nostats", "-y", self.output_path,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
             **_subprocess_options(),
         )
-        await asyncio.sleep(0.5)
-        if self._process.returncode is not None:
-            error = await self._process.stderr.read() if self._process.stderr else b""
-            self._process = None
-            raise EngineError(error.decode(errors="replace").strip() or "Recording failed to start")
-        self._notify("recording", {"status": "recording", "error": "", "path": self.output_path})
-        return self.output_path
+        self._process = process
+        self._monitor_task = asyncio.create_task(
+            self._monitor(process, output), name="audio-recording-monitor"
+        )
+        for _attempt in range(50):
+            if process.returncode is not None:
+                break
+            if self._progress_event.is_set():
+                self._notify(
+                    "recording",
+                    {
+                        "status": "recording",
+                        "error": "",
+                        "path": self.output_path,
+                        "format": extension.lstrip("."),
+                        "sizeBytes": self._output_size(output),
+                    },
+                )
+                return self.output_path
+            await asyncio.sleep(0.1)
+
+        if process.returncode is None:
+            self._stopping = True
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=3)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+        if self._monitor_task:
+            await self._monitor_task
+        self._process = None
+        self._monitor_task = None
+        self._remove_empty_output(output)
+        details = " | ".join(self._error_lines)
+        if details:
+            raise EngineError(f"Recording failed to receive audio: {details}")
+        raise EngineError(
+            "Recording failed to receive audio within 5 seconds. "
+            "Confirm the selected Windows audio source is active and not locked by another application."
+        )
+
+    async def _monitor(self, process: asyncio.subprocess.Process, output: Path) -> None:
+        if process.stderr:
+            while True:
+                line = await process.stderr.readline()
+                if not line:
+                    break
+                text = line.decode(errors="replace").strip()
+                key, separator, value = text.partition("=")
+                if separator and key in {"out_time_us", "out_time_ms", "total_size"}:
+                    try:
+                        if int(value) > 0 and self._progress_event:
+                            self._progress_event.set()
+                    except ValueError:
+                        pass
+                if text and not PROGRESS_PATTERN.match(text):
+                    self._error_lines.append(text)
+        return_code = await process.wait()
+        if process is not self._process or self._stopping:
+            return
+        self._process = None
+        details = " | ".join(self._error_lines)
+        error = f"FFmpeg recording stopped unexpectedly ({return_code})"
+        if details:
+            error = f"{error}: {details}"
+        self._remove_empty_output(output)
+        self._notify(
+            "recording",
+            {
+                "status": "error",
+                "error": error,
+                "path": self.output_path,
+                "sizeBytes": self._output_size(output),
+            },
+        )
 
     async def stop(self) -> None:
-        if self._process and self._process.returncode is None:
-            if self._process.stdin:
-                self._process.stdin.write(b"q\n")
-                await self._process.stdin.drain()
+        process = self._process
+        self._stopping = True
+        if process and process.returncode is None:
+            if process.stdin:
+                process.stdin.write(b"q\n")
+                await process.stdin.drain()
             try:
-                await asyncio.wait_for(self._process.wait(), timeout=5)
+                await asyncio.wait_for(process.wait(), timeout=5)
             except asyncio.TimeoutError:
-                self._process.terminate()
+                process.terminate()
                 try:
-                    await asyncio.wait_for(self._process.wait(), timeout=3)
+                    await asyncio.wait_for(process.wait(), timeout=3)
                 except asyncio.TimeoutError:
-                    self._process.kill()
-                    await self._process.wait()
+                    process.kill()
+                    await process.wait()
+        if self._monitor_task:
+            await self._monitor_task
+        output = Path(self.output_path) if self.output_path else None
+        size = self._output_size(output) if output else 0
         self._process = None
-        self._notify("recording", {"status": "stopped", "error": "", "path": self.output_path})
+        self._monitor_task = None
+        self._progress_event = None
+        self._stopping = False
+        if process and size == 0:
+            if output:
+                self._remove_empty_output(output)
+            error = "Recording stopped without receiving any audio; the empty file was removed"
+            self._notify(
+                "recording",
+                {"status": "error", "error": error, "path": self.output_path, "sizeBytes": 0},
+            )
+            raise EngineError(error)
+        self._notify(
+            "recording",
+            {"status": "stopped", "error": "", "path": self.output_path, "sizeBytes": size},
+        )
+
+    @staticmethod
+    def _output_size(output: Path) -> int:
+        try:
+            return output.stat().st_size
+        except OSError:
+            return 0
+
+    @staticmethod
+    def _remove_empty_output(output: Path) -> None:
+        try:
+            if output.exists() and output.stat().st_size == 0:
+                output.unlink()
+        except OSError:
+            pass

@@ -15,24 +15,30 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
 from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 
 from . import __version__
-from .paths import controller_exit_request_path, is_packaged, packaged_executable
+from .audio_engine import audio_conversion_plan
+from .paths import bundled_ffmpeg, controller_exit_request_path, is_packaged, packaged_executable
 from .updater_health import launched_version, read_update_status, request_update_apply, request_update_check
 
 
 class CoreBridge(QObject):
     connectedChanged = Signal()
     compatibleChanged = Signal()
+    startingCoreChanged = Signal()
     busyChanged = Signal()
     stateJsonChanged = Signal()
     settingsJsonChanged = Signal()
     audioSourcesJsonChanged = Signal()
     messageChanged = Signal()
     updateStatusChanged = Signal()
+    conversionChanged = Signal()
     exitReady = Signal()
     _resultReady = Signal(object)
     _updateResultReady = Signal(object)
+    _conversionResultReady = Signal(object)
+    _coreStartupFinished = Signal(int)
 
     def __init__(self, host: str = "127.0.0.1", port: int = 8010, auto_start: bool = True) -> None:
         super().__init__()
@@ -41,6 +47,7 @@ class CoreBridge(QObject):
         self._connected = False
         self._compatible = False
         self._starting_core = False
+        self._core_start_attempt = 0
         self._replacing_core = False
         self._replacement_failed_version = ""
         self._busy = False
@@ -56,10 +63,17 @@ class CoreBridge(QObject):
         }
         self._update_status_json = json.dumps(self._update_status)
         self._update_refresh_running = False
+        self._conversion_busy = False
+        self._conversion_message = "Choose an existing recording to convert."
+        self._conversion_output = ""
+        self._conversion_process: subprocess.Popen[str] | None = None
+        self._conversion_cancel_requested = False
         self._last_activity_sequence = 0
         self._discard_controller_exit_request()
         self._resultReady.connect(self._accept_result)
         self._updateResultReady.connect(self._accept_update_result)
+        self._conversionResultReady.connect(self._accept_conversion_result)
+        self._coreStartupFinished.connect(self._finish_core_start)
         if auto_start:
             QTimer.singleShot(0, self.ensureCore)
             QTimer.singleShot(800, self.refreshUpdateStatus)
@@ -75,6 +89,10 @@ class CoreBridge(QObject):
     @Property(bool, notify=compatibleChanged)
     def compatible(self) -> bool:
         return self._compatible
+
+    @Property(bool, notify=startingCoreChanged)
+    def startingCore(self) -> bool:
+        return self._starting_core
 
     @Property(bool, notify=busyChanged)
     def busy(self) -> bool:
@@ -103,6 +121,18 @@ class CoreBridge(QObject):
     @Property(bool, notify=stateJsonChanged)
     def activeOutputs(self) -> bool:
         return self._has_active_outputs()
+
+    @Property(bool, notify=conversionChanged)
+    def conversionBusy(self) -> bool:
+        return self._conversion_busy
+
+    @Property(str, notify=conversionChanged)
+    def conversionMessage(self) -> str:
+        return self._conversion_message
+
+    @Property(str, notify=conversionChanged)
+    def conversionOutput(self) -> str:
+        return self._conversion_output
 
     def _publish_update_status(self, status: dict) -> None:
         status = {
@@ -179,8 +209,19 @@ class CoreBridge(QObject):
             return
         if self._starting_core:
             return
-        self._starting_core = True
-        threading.Thread(target=self._start_core_with_retries, daemon=True, name="core-startup").start()
+        self._set_starting_core(True)
+        self._set_connected(False)
+        self._set_compatible(False)
+        self._set_message("Starting broadcast core and waiting for confirmation…")
+        self._core_start_attempt += 1
+        attempt = self._core_start_attempt
+        QTimer.singleShot(20_000, lambda: self._expire_core_start(attempt))
+        threading.Thread(
+            target=self._start_core_with_retries,
+            args=(attempt,),
+            daemon=True,
+            name=f"core-startup-{attempt}",
+        ).start()
 
     @Slot()
     def refresh(self) -> None:
@@ -288,6 +329,104 @@ class CoreBridge(QObject):
     def localFilePath(self, file_url: str) -> str:
         return self._local_path(file_url)
 
+    @Slot(str, str, int)
+    def convertAudio(self, file_url: str, encoding: str, bitrate: int) -> None:
+        if self._conversion_busy:
+            return
+        if self._has_active_outputs():
+            self._conversion_message = "Stop live streams and recordings before converting a file."
+            self.conversionChanged.emit()
+            return
+        source = Path(self._local_path(file_url)).expanduser()
+        if not source.is_file():
+            self._conversion_message = "Select an existing audio or video file first."
+            self.conversionChanged.emit()
+            return
+        self._conversion_busy = True
+        self._conversion_output = ""
+        self._conversion_cancel_requested = False
+        self._conversion_message = f"Converting {source.name} to {encoding.upper()}…"
+        self.conversionChanged.emit()
+        threading.Thread(
+            target=self._convert_audio_worker,
+            args=(source, encoding, bitrate),
+            daemon=True,
+            name="audio-converter",
+        ).start()
+
+    def _convert_audio_worker(self, source: Path, encoding: str, bitrate: int) -> None:
+        try:
+            ffmpeg = bundled_ffmpeg()
+            if not ffmpeg:
+                raise RuntimeError("FFmpeg was not found")
+            output, codec, output_format = audio_conversion_plan(source, encoding, bitrate)
+            if self._conversion_cancel_requested:
+                self._conversionResultReady.emit({"cancelled": True})
+                return
+            process = subprocess.Popen(
+                [
+                    str(ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "warning",
+                    "-i", str(source), "-map", "0:a:0", "-vn", *codec,
+                    "-map_metadata", "0", "-f", output_format, str(output),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=(
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+                ),
+            )
+            self._conversion_process = process
+            if self._conversion_cancel_requested:
+                process.terminate()
+            _stdout, stderr = process.communicate()
+            if self._conversion_cancel_requested:
+                output.unlink(missing_ok=True)
+                self._conversionResultReady.emit({"cancelled": True})
+                return
+            if process.returncode != 0:
+                output.unlink(missing_ok=True)
+                details = (stderr or "").strip().splitlines()
+                raise RuntimeError(details[-1] if details else f"FFmpeg exited with code {process.returncode}")
+            self._conversionResultReady.emit({"output": str(output)})
+        except Exception as error:
+            self._conversionResultReady.emit({"error": str(error)})
+        finally:
+            self._conversion_process = None
+
+    @Slot()
+    def cancelConversion(self) -> None:
+        process = self._conversion_process
+        if not self._conversion_busy:
+            return
+        self._conversion_cancel_requested = True
+        self._conversion_message = "Cancelling conversion…"
+        self.conversionChanged.emit()
+        if process is not None and process.poll() is None:
+            process.terminate()
+
+    @Slot()
+    def openConversionFolder(self) -> None:
+        if self._conversion_output:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self._conversion_output).parent)))
+
+    @Slot(object)
+    def _accept_conversion_result(self, result: object) -> None:
+        response = result if isinstance(result, dict) else {"error": "Invalid conversion result"}
+        self._conversion_busy = False
+        if response.get("cancelled"):
+            self._conversion_message = "Conversion cancelled."
+        elif response.get("error"):
+            self._conversion_message = f"Conversion failed: {response['error']}"
+        else:
+            self._conversion_output = str(response.get("output") or "")
+            self._conversion_message = f"Converted file saved as {Path(self._conversion_output).name}"
+        self.conversionChanged.emit()
+
     def _run(self, command: str, payload: dict[str, Any] | None = None, quiet: bool = False) -> None:
         if self._busy and not quiet:
             return
@@ -338,6 +477,9 @@ class CoreBridge(QObject):
     @Slot(object)
     def _accept_result(self, result: object) -> None:
         response = result if isinstance(result, dict) else {"type": "error", "error": "Invalid core response"}
+        was_connected = self._connected
+        was_compatible = self._compatible
+        was_starting = self._starting_core
         quiet = bool(response.pop("_quiet", False))
         core_stopped = bool(response.pop("_core_stopped", False))
         exit_after = bool(response.pop("_exit_after", False))
@@ -363,6 +505,7 @@ class CoreBridge(QObject):
         self._set_connected(response.get("type") != "error" or "state" in response)
         state = response.get("state")
         if isinstance(state, dict):
+            self._set_starting_core(False)
             self._state_json = json.dumps(state)
             self.stateJsonChanged.emit()
             activity = state.get("lastCommand")
@@ -380,7 +523,14 @@ class CoreBridge(QObject):
             core_version = str(state.get("core", {}).get("version") or "unknown")
             compatible = core_version == __version__
             self._set_compatible(compatible)
-            if not compatible:
+            if compatible and (
+                not was_connected
+                or not was_compatible
+                or was_starting
+                or self._message in {"Connecting to broadcast core…", "Broadcast core stopped"}
+            ):
+                self._set_message(f"Broadcast core {core_version} connected")
+            elif not compatible:
                 if self._state_has_active_outputs(state):
                     self._set_message(
                         f"Core {core_version} is still running. Stop all outputs to finish updating to {__version__}."
@@ -443,7 +593,7 @@ class CoreBridge(QObject):
         except (OSError, ValueError, json.JSONDecodeError):
             return False
 
-    def _start_core_with_retries(self) -> None:
+    def _start_core_with_retries(self, attempt: int) -> None:
         try:
             for _ in range(3):
                 if not self._probe():
@@ -455,7 +605,40 @@ class CoreBridge(QObject):
                     time.sleep(0.25)
             self._resultReady.emit({"type": "error", "error": "The broadcast core did not start after three attempts", "_quiet": True})
         finally:
-            self._starting_core = False
+            self._coreStartupFinished.emit(attempt)
+
+    @Slot(int)
+    def _finish_core_start(self, attempt: int) -> None:
+        if attempt != self._core_start_attempt:
+            return
+        self._set_starting_core(False)
+
+    def _expire_core_start(self, attempt: int) -> None:
+        if attempt != self._core_start_attempt or not self._starting_core:
+            return
+        if self._probe():
+            self._set_message("Broadcast core responded; confirming its version and status…")
+            self.refresh()
+            QTimer.singleShot(3_000, lambda: self._expire_core_confirmation(attempt))
+            return
+        self._set_starting_core(False)
+        self._set_connected(False)
+        self._set_compatible(False)
+        self._set_message("Broadcast core startup timed out. Select Start Core to retry.")
+
+    def _expire_core_confirmation(self, attempt: int) -> None:
+        if attempt != self._core_start_attempt or not self._starting_core:
+            return
+        self._set_starting_core(False)
+        if self._probe():
+            self._set_message(
+                "Broadcast core is responding but status confirmation timed out. "
+                "Select Start Core to retry the status check."
+            )
+        else:
+            self._set_connected(False)
+            self._set_compatible(False)
+            self._set_message("Broadcast core stopped responding. Select Start Core to retry.")
 
     def _stop_core_worker(self, exit_after: bool) -> None:
         try:
@@ -692,6 +875,11 @@ class CoreBridge(QObject):
         if self._compatible != value:
             self._compatible = value
             self.compatibleChanged.emit()
+
+    def _set_starting_core(self, value: bool) -> None:
+        if self._starting_core != value:
+            self._starting_core = value
+            self.startingCoreChanged.emit()
 
     def _set_busy(self, value: bool) -> None:
         if self._busy != value:
