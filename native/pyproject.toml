@@ -9,6 +9,7 @@ description = "Native Qt control surface and isolated broadcast core for RebornB
 requires-python = ">=3.11"
 dependencies = [
   "PySide6-Essentials>=6.8,<7",
+  "PySide6-Addons>=6.8,<7",
   "websockets>=13,<17",
 ]
 
