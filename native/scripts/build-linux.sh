@@ -31,7 +31,8 @@ cp "$qt_lib_root"/libQt6QuickControls2*.so.6 \
 mkdir -p "$package/assets"
 cp "$project_root/assets/KRBroadcasterIcon.png" "$package/assets/KRBroadcasterIcon.png"
 mkdir -p "$package/updater"
-cp "$project_root/updater/rebornbroadcaster.linux.app.json" "$package/updater/app-config.json"
+"$venv/bin/python" -c 'import json, pathlib, sys; source, destination, version = sys.argv[1:]; data = json.loads(pathlib.Path(source).read_text(encoding="utf-8")); data["currentVersion"] = version; pathlib.Path(destination).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")' \
+  "$project_root/updater/rebornbroadcaster.linux.app.json" "$package/updater/app-config.json" "$version"
 cp "$project_root/updater/agent-bootstrap.json" "$package/updater/agent-bootstrap.json"
 chmod +x "$package/RebornBroadcaster"
 command -v ffmpeg >/dev/null || { echo "FFmpeg is required" >&2; exit 5; }
