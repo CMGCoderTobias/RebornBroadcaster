@@ -13,6 +13,7 @@ python3 -m venv "$venv"
 actual="$("$venv/bin/python" -c 'from reborn_broadcaster import __version__; print(__version__)')"
 [[ "$actual" == "$version" ]] || { echo "Native version $actual does not match $version" >&2; exit 3; }
 qml_root="$("$venv/bin/python" -c 'import pathlib, PySide6; print(pathlib.Path(PySide6.__file__).parent / "Qt" / "qml")')"
+qt_lib_root="$("$venv/bin/python" -c 'import pathlib, PySide6; print(pathlib.Path(PySide6.__file__).parent / "Qt" / "lib")')"
 [[ -d "$qml_root" ]] || { echo "PySide6 QML modules were not installed" >&2; exit 4; }
 rm -rf "$deployment" "$package"
 mkdir -p "$(dirname "$package")"
@@ -20,8 +21,13 @@ mkdir -p "$(dirname "$package")"
 generated="$(find "$deployment" -maxdepth 1 -type d \( -name 'launcher.dist' -o -name 'RebornBroadcaster.dist' \) -print -quit)"
 [[ -n "$generated" ]] || { echo "Nuitka output was not found" >&2; exit 4; }
 mv "$generated" "$package"
-mkdir -p "$package/PySide6/Qt"
+mkdir -p "$package/PySide6/Qt/lib"
 cp -a "$qml_root" "$package/PySide6/Qt/qml"
+cp "$qt_lib_root"/libQt6QuickControls2*.so.6 \
+  "$qt_lib_root"/libQt6QuickTemplates2.so.6 \
+  "$qt_lib_root"/libQt6QuickDialogs2*.so.6 \
+  "$qt_lib_root"/libQt6QuickLayouts.so.6 \
+  "$package/PySide6/Qt/lib/"
 chmod +x "$package/RebornBroadcaster"
 command -v ffmpeg >/dev/null || { echo "FFmpeg is required" >&2; exit 5; }
 echo "Linux package staged at $package"
