@@ -28,6 +28,8 @@ cp "$qt_lib_root"/libQt6QuickControls2*.so.6 \
   "$qt_lib_root"/libQt6QuickDialogs2*.so.6 \
   "$qt_lib_root"/libQt6QuickLayouts.so.6 \
   "$package/PySide6/Qt/lib/"
+mkdir -p "$package/assets"
+cp "$project_root/assets/KRBroadcasterIcon.png" "$package/assets/KRBroadcasterIcon.png"
 chmod +x "$package/RebornBroadcaster"
 command -v ffmpeg >/dev/null || { echo "FFmpeg is required" >&2; exit 5; }
 echo "Linux package staged at $package"

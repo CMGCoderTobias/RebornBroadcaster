@@ -17,9 +17,9 @@ def _agent_root() -> Path:
     configured = os.environ.get("REBORN_UPDATE_AGENT_HOME")
     if configured:
         return Path(configured).expanduser().resolve()
-    local_app_data = os.environ.get("LOCALAPPDATA")
+    local_app_data = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_DATA_HOME")
     if not local_app_data:
-        raise RuntimeError("LOCALAPPDATA is unavailable")
+        local_app_data = Path.home() / ".local" / "share"
     return (Path(local_app_data) / "Reborn Entertainment" / "UpdateAgent").resolve()
 
 

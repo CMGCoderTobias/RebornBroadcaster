@@ -8,17 +8,19 @@ from pathlib import Path
 
 def is_packaged() -> bool:
     program = Path(sys.argv[0]).name.lower() if sys.argv else ""
+    executable = Path(sys.executable).name.lower()
+    packaged_names = {"rebornbroadcaster", "rebornbroadcaster.exe"}
     return bool(
         getattr(sys, "frozen", False)
         or "__compiled__" in globals()
-        or program == "rebornbroadcaster.exe"
-        or Path(sys.executable).name.lower() == "rebornbroadcaster.exe"
+        or program in packaged_names
+        or executable in packaged_names
     )
 
 
 def packaged_executable() -> Path:
     program = Path(sys.argv[0]).resolve() if sys.argv else Path(sys.executable).resolve()
-    return program if program.name.lower() == "rebornbroadcaster.exe" else Path(sys.executable).resolve()
+    return program if program.name.lower() in {"rebornbroadcaster", "rebornbroadcaster.exe"} else Path(sys.executable).resolve()
 
 
 def resource_root() -> Path:
