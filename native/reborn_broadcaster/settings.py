@@ -27,6 +27,7 @@ DEFAULTS: dict[str, Any] = {
     "streamUrl": "",
     "streamPublic": "0",
     "encodingType": "mp3",
+    "audioBackendId": "",
     "audioSourceId": "",
     "audioSourceName": "",
     "bitrate": 128,

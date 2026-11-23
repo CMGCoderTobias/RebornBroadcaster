@@ -18,6 +18,7 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 
 from . import __version__
+from .audio_backends import current_audio_backend
 from .audio_engine import audio_conversion_plan
 from .paths import bundled_ffmpeg, controller_exit_request_path, is_packaged, packaged_executable
 from .updater_health import launched_version, read_update_status, request_update_apply, request_update_check
@@ -109,6 +110,14 @@ class CoreBridge(QObject):
     @Property(str, notify=audioSourcesJsonChanged)
     def audioSourcesJson(self) -> str:
         return self._audio_sources_json
+
+    @Property(str, constant=True)
+    def audioBackendId(self) -> str:
+        return current_audio_backend().backend_id
+
+    @Property(str, constant=True)
+    def audioBackendName(self) -> str:
+        return current_audio_backend().display_name
 
     @Property(str, notify=messageChanged)
     def message(self) -> str:

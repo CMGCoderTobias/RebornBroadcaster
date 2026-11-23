@@ -355,7 +355,7 @@ class RecordingEngine:
             raise EngineError(f"Recording failed to receive audio: {details}")
         raise EngineError(
             "Recording failed to receive audio within 5 seconds. "
-            "Confirm the selected Windows audio source is active and not locked by another application."
+            f"Confirm the selected {current_audio_backend().display_name} source is active and not locked by another application."
         )
 
     async def _monitor(self, process: asyncio.subprocess.Process, output: Path) -> None:

@@ -21,6 +21,8 @@ ApplicationWindow {
     property var state: ({})
     property var settings: ({})
     property var audioSources: []
+    property string audioBackendId: backend ? backend.audioBackendId : "unknown"
+    property string audioBackendName: backend ? backend.audioBackendName : "System audio"
     property string conversionFile: ""
     property var updateStatus: ({ "state": "idle", "launchedVersion": "", "latestVersion": "" })
     property bool coreConnected: Boolean(backend && backend.connected)
@@ -81,7 +83,12 @@ ApplicationWindow {
             nowPlayingFileEnabled.checked = settings.nowPlayingFileEnabled === true
             nowPlayingFileField.text = settings.nowPlayingFile || ""
             encodingCombo.currentIndex = Math.max(0, encodingCombo.model.indexOf(settings.encodingType || "mp3"))
-            sourceCombo.savedSource = settings.audioSourceName || ""
+            let savedSource = settings.audioSourceName || settings.audioSourceId || ""
+            if (settings.audioBackendId && settings.audioBackendId !== audioBackendId)
+                savedSource = ""
+            else if (!settings.audioBackendId && audioBackendId === "pipewire" && savedSource.toLowerCase().indexOf("voicemeeter") >= 0)
+                savedSource = ""
+            sourceCombo.savedSource = savedSource
             sourceCombo.model = audioSourceChoices()
             sourceCombo.currentIndex = Math.max(0, sourceCombo.model.indexOf(sourceCombo.savedSource))
             bitrateField.value = Number(settings.bitrate || 128)
@@ -99,10 +106,12 @@ ApplicationWindow {
 
     function audioSourceChoices() {
         let choices = audioSources ? audioSources.slice() : []
-        let saved = sourceCombo ? sourceCombo.savedSource : ""
-        if (saved && choices.indexOf(saved) < 0) choices.unshift(saved)
-        if (choices.length === 0) choices.push("No Windows audio sources found")
+        if (choices.length === 0) choices.push(noAudioSourcesText())
         return choices
+    }
+
+    function noAudioSourcesText() {
+        return "No " + audioBackendName + " sources found"
     }
 
     function applyUpdateStatus() {
@@ -141,8 +150,9 @@ ApplicationWindow {
             nowPlayingFileEnabled: nowPlayingFileEnabled.checked,
             nowPlayingFile: nowPlayingFileField.text,
             encodingType: encodingCombo.currentText,
-            audioSourceName: sourceCombo.currentText === "No Windows audio sources found" ? "" : sourceCombo.currentText,
-            audioSourceId: sourceCombo.currentText === "No Windows audio sources found" ? "" : sourceCombo.currentText,
+            audioBackendId: audioBackendId,
+            audioSourceName: sourceCombo.currentText === noAudioSourcesText() ? "" : sourceCombo.currentText,
+            audioSourceId: sourceCombo.currentText === noAudioSourcesText() ? "" : sourceCombo.currentText,
             bitrate: bitrateField.value,
             recordingPath: recordingField.text, adaptiveBackoffEnabled: adaptiveEnabled.checked,
             icecastEnabled: icecastEnabled.checked, obsEnabled: obsEnabled.checked,
@@ -661,7 +671,7 @@ ApplicationWindow {
                                                 id: sourceCombo
                                                 property string savedSource: ""
                                                 Layout.fillWidth: true
-                                                model: ["No Windows audio sources found"]
+                                                model: [window.noAudioSourcesText()]
                                             }
                                             BlueButton { text: "Refresh"; onClicked: { if (window.backend) window.backend.refreshAudioSources() } }
                                         }
