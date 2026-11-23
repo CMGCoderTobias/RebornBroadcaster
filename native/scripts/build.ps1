@@ -71,7 +71,7 @@ if ($LASTEXITCODE -ne 0) {
     --windows-icon-from-ico=$iconFile `
     --noinclude-qt-translations `
     --include-data-files="$(Join-Path $nativeRoot 'qml\Main.qml')=qml/Main.qml" `
-    --include-qt-plugins=platforminputcontexts,qml,qmllint,qmltooling,vectorimageformats `
+    --include-qt-plugins=platforminputcontexts,qmltooling,vectorimageformats `
     --noinclude-dlls=Qt6Charts* `
     --noinclude-dlls=Qt6Sensors* `
     --noinclude-dlls=Qt6WebEngine*
