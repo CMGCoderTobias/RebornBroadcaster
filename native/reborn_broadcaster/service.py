@@ -19,7 +19,7 @@ from .audio_engine import (
 from .icecast_control import IcecastControl
 from .obs_adapter import ObsController, ObsError, find_obs
 from .paths import controller_exit_request_path
-from .settings import SettingsError, SettingsStore
+from .settings import STREAM_DESTINATION_KEYS, SettingsError, SettingsStore
 
 
 Listener = Callable[[dict[str, Any]], None]
@@ -29,6 +29,10 @@ class BroadcastService:
     def __init__(self, store: SettingsStore | None = None) -> None:
         self.store = store or SettingsStore()
         self.settings = self.store.load()
+        if not self.settings.get("streamDestinationUpdatedAt"):
+            self.settings = self.store.save(
+                {"streamDestinationUpdatedAt": self._timestamp()}, merge=True
+            )
         self.state: dict[str, Any] = {
             "core": {"status": "ready", "headless": True, "version": __version__, "pid": os.getpid()},
             "outputs": {
@@ -55,6 +59,9 @@ class BroadcastService:
             "listenerStatus": "stopped",
             "listenerError": "",
             "nowPlaying": str(self.settings.get("nowPlaying") or ""),
+            "streamDestinationUpdatedAt": str(
+                self.settings.get("streamDestinationUpdatedAt") or ""
+            ),
             "metadataStatus": "idle",
             "metadataError": "",
             "lastCommand": None,
@@ -134,6 +141,8 @@ class BroadcastService:
                 return {"ok": True, "state": self.snapshot()}
             if normalized == "get-settings":
                 return {"ok": True, "settings": deepcopy(self.settings)}
+            if normalized == "get-stream-destination":
+                return {"ok": True, "destination": self._stream_destination()}
             if normalized == "list-audio-sources":
                 return {"ok": True, "audioSources": await asyncio.to_thread(list_audio_sources)}
             if normalized == "select-audio-source":
@@ -144,6 +153,8 @@ class BroadcastService:
                 return {**result, "audioSource": source, "route": route}
             if normalized == "save-settings":
                 return self._save_settings(payload.get("settings", payload), payload.get("merge", True))
+            if normalized == "set-stream-destination":
+                return self._set_stream_destination(payload)
             if normalized == "export-config":
                 return self._export_config(payload)
             if normalized == "import-config":
@@ -219,6 +230,18 @@ class BroadcastService:
         if not isinstance(incoming, dict):
             raise SettingsError("settings must be an object")
         candidate = self.store.normalize({**self.settings, **incoming} if merge else incoming)
+        destination_changed = any(
+            candidate.get(key) != self.settings.get(key) for key in STREAM_DESTINATION_KEYS
+        )
+        if destination_changed:
+            incoming_at = str(incoming.get("streamDestinationUpdatedAt") or "").strip()
+            current_at = str(self.settings.get("streamDestinationUpdatedAt") or "").strip()
+            if incoming_at and current_at and incoming_at <= current_at:
+                for key in STREAM_DESTINATION_KEYS:
+                    candidate[key] = self.settings.get(key)
+                candidate["streamDestinationUpdatedAt"] = current_at
+            elif not incoming_at:
+                candidate["streamDestinationUpdatedAt"] = self._timestamp()
         if candidate["obsEnabled"] and candidate["obsHost"] in {"127.0.0.1", "localhost", "::1"}:
             executable = find_obs(str(candidate.get("obsExePath", "")))
             if not executable:
@@ -236,8 +259,41 @@ class BroadcastService:
             }
         )
         self.state["nowPlaying"] = str(self.settings.get("nowPlaying") or "")
+        self.state["streamDestinationUpdatedAt"] = str(
+            self.settings.get("streamDestinationUpdatedAt") or ""
+        )
         self._engine_state("radio", {})
         return {"ok": True, "settings": deepcopy(self.settings), "state": self.snapshot()}
+
+    def _stream_destination(self) -> dict[str, Any]:
+        return {
+            **{key: deepcopy(self.settings.get(key)) for key in STREAM_DESTINATION_KEYS},
+            "updatedAt": str(self.settings.get("streamDestinationUpdatedAt") or ""),
+        }
+
+    def _set_stream_destination(self, payload: dict[str, Any]) -> dict[str, Any]:
+        incoming = payload.get("destination", payload)
+        if not isinstance(incoming, dict):
+            raise SettingsError("destination must be an object")
+        incoming_at = str(incoming.get("updatedAt") or "").strip()
+        if not incoming_at:
+            raise SettingsError("destination updatedAt is required")
+        current_at = str(self.settings.get("streamDestinationUpdatedAt") or "").strip()
+        if current_at and incoming_at <= current_at:
+            return {
+                "ok": True,
+                "applied": False,
+                "reason": "RebornBroadcaster has an equally recent or newer destination",
+                "destination": self._stream_destination(),
+            }
+        changes = {key: incoming[key] for key in STREAM_DESTINATION_KEYS if key in incoming}
+        changes["streamDestinationUpdatedAt"] = incoming_at
+        result = self._save_settings(changes, True)
+        return {
+            **result,
+            "applied": True,
+            "destination": self._stream_destination(),
+        }
 
     def _export_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         file_path = str(payload.get("filePath") or "").strip()

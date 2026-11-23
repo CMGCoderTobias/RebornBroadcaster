@@ -21,6 +21,7 @@ DEFAULTS: dict[str, Any] = {
     "mountpoint": "stream",
     "username": "source",
     "sourcepassword": "",
+    "streamDestinationUpdatedAt": "",
     "streamName": "",
     "streamGenre": "",
     "streamDescription": "",
@@ -45,6 +46,18 @@ DEFAULTS: dict[str, Any] = {
     "obsExePath": "",
     "obsAutoLaunch": False,
 }
+
+STREAM_DESTINATION_KEYS = (
+    "icecastEnabled",
+    "icecastHost",
+    "icecastPort",
+    "icecastTls",
+    "icecastProxyPath",
+    "icecastLegacySource",
+    "mountpoint",
+    "username",
+    "sourcepassword",
+)
 
 
 class SettingsError(ValueError):
@@ -95,6 +108,9 @@ class SettingsStore:
         if not legacy_source_explicit:
             settings["icecastLegacySource"] = bool(settings["icecastProxyPath"])
         settings["icecastPort"] = str(settings.get("icecastPort", "8000")).strip()
+        settings["streamDestinationUpdatedAt"] = str(
+            settings.get("streamDestinationUpdatedAt") or ""
+        ).strip()
         settings["obsPort"] = _integer(settings.get("obsPort"), 4455, 1, 65535)
         settings["bitrate"] = _integer(settings.get("bitrate"), 128, 8, 2048)
         settings["adaptiveMinimumBitrate"] = _integer(
