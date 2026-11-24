@@ -49,6 +49,7 @@ class CoreBridge(QObject):
         self._compatible = False
         self._starting_core = False
         self._core_start_attempt = 0
+        self._core_start_grace_until = 0.0
         self._replacing_core = False
         self._replacement_failed_version = ""
         self._busy = False
@@ -222,6 +223,7 @@ class CoreBridge(QObject):
         self._set_connected(False)
         self._set_compatible(False)
         self._set_message("Starting broadcast core and waiting for confirmation…")
+        self._core_start_grace_until = time.monotonic() + 20.0
         self._core_start_attempt += 1
         attempt = self._core_start_attempt
         QTimer.singleShot(20_000, lambda: self._expire_core_start(attempt))
@@ -234,6 +236,8 @@ class CoreBridge(QObject):
 
     @Slot()
     def refresh(self) -> None:
+        if self._starting_core:
+            return
         self._run("get-state", quiet=True)
 
     @Slot()
@@ -499,6 +503,13 @@ class CoreBridge(QObject):
             self._set_message("K-os Radio Broadcaster stopped the broadcast core")
             self.exitReady.emit()
             return
+        if (
+            response.get("type") == "error"
+            and quiet
+            and time.monotonic() < self._core_start_grace_until
+            and self._is_connection_refused(str(response.get("error") or ""))
+        ):
+            return
         if core_stopped and response.get("type") != "error":
             state = response.get("state")
             if isinstance(state, dict):
@@ -514,6 +525,7 @@ class CoreBridge(QObject):
         self._set_connected(response.get("type") != "error" or "state" in response)
         state = response.get("state")
         if isinstance(state, dict):
+            self._core_start_grace_until = 0.0
             self._set_starting_core(False)
             self._state_json = json.dumps(state)
             self.stateJsonChanged.emit()
@@ -612,7 +624,7 @@ class CoreBridge(QObject):
                         self._resultReady.emit(self._request("get-state", {}) | {"_quiet": True})
                         return
                     time.sleep(0.25)
-            self._resultReady.emit({"type": "error", "error": "The broadcast core did not start after three attempts", "_quiet": True})
+            self._resultReady.emit({"type": "error", "error": "The broadcast core did not start after three attempts", "_quiet": False})
         finally:
             self._coreStartupFinished.emit(attempt)
 
@@ -761,6 +773,11 @@ class CoreBridge(QObject):
                 return connection.recv(32).strip() == b"PONG"
         except OSError:
             return False
+
+    @staticmethod
+    def _is_connection_refused(message: str) -> bool:
+        normalized = message.lower()
+        return any(token in normalized for token in ("errno 111", "10061", "connection refused", "actively refused"))
 
     def _force_stop_stale_listener(self) -> None:
         if sys.platform != "win32":
