@@ -74,6 +74,7 @@ class CoreBridge(QObject):
         self._settings_json = "{}"
         self._audio_sources_json = "[]"
         self._audio_level_db = -96.0
+        self._meter_source = ""
         self._stopping_core = False
         self._message = "Connecting to broadcast core…"
         self._update_status = {
@@ -360,7 +361,7 @@ class CoreBridge(QObject):
             settings = {}
         source = source.strip()
         settings.update({"audioSourceId": source, "audioSourceName": source})
-        self._audio_meter.start(settings)
+        self._start_audio_meter(settings, source)
 
     @Slot()
     def shutdown(self) -> None:
@@ -579,6 +580,14 @@ class CoreBridge(QObject):
             self._set_starting_core(False)
             self._state_json = json.dumps(state)
             self.stateJsonChanged.emit()
+            try:
+                meter_settings = json.loads(self._settings_json)
+            except json.JSONDecodeError:
+                meter_settings = {}
+            self._start_audio_meter(
+                meter_settings,
+                str(state.get("effectiveAudioSource") or ""),
+            )
             activity = state.get("lastCommand")
             if isinstance(activity, dict):
                 sequence = int(activity.get("sequence") or 0)
@@ -614,7 +623,13 @@ class CoreBridge(QObject):
         if isinstance(settings, dict):
             self._settings_json = json.dumps(settings)
             self.settingsJsonChanged.emit()
-            self._audio_meter.start(settings)
+            effective_source = ""
+            try:
+                current_state = json.loads(self._state_json)
+                effective_source = str(current_state.get("effectiveAudioSource") or "")
+            except json.JSONDecodeError:
+                pass
+            self._start_audio_meter(settings, effective_source)
         audio_sources = response.get("audioSources")
         if isinstance(audio_sources, list):
             self._audio_sources_json = json.dumps([str(source) for source in audio_sources])
@@ -976,6 +991,17 @@ class CoreBridge(QObject):
         if abs(self._audio_level_db - value) >= 0.1:
             self._audio_level_db = value
             self.audioLevelChanged.emit()
+
+    def _start_audio_meter(self, settings: dict[str, Any], source: str = "") -> None:
+        source = source.strip() or str(
+            settings.get("audioSourceId") or settings.get("audioSourceName") or ""
+        ).strip()
+        if source == self._meter_source:
+            return
+        self._meter_source = source
+        meter_settings = dict(settings)
+        meter_settings.update({"audioSourceId": source, "audioSourceName": source})
+        self._audio_meter.start(meter_settings)
 
     def _set_message(self, value: str) -> None:
         if self._message != value:

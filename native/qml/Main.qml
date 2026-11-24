@@ -210,6 +210,12 @@ ApplicationWindow {
 
     Timer { interval: 1000; repeat: true; running: window.radioLive; onTriggered: window.liveSeconds++ }
     Timer { interval: 2500; repeat: true; running: Boolean(window.backend); onTriggered: { if (window.backend) window.backend.refresh() } }
+    Timer {
+        interval: 2500
+        repeat: true
+        running: Boolean(window.backend) && window.page === 1 && window.settingsPage === 2
+        onTriggered: window.backend.refreshAudioSources()
+    }
     ListModel { id: logModel }
 
     FileDialog {

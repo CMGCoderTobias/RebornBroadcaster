@@ -19,6 +19,7 @@ from .audio_engine import (
 from .icecast_control import IcecastControl
 from .obs_adapter import ObsController, ObsError, find_obs
 from .paths import controller_exit_request_path
+from .pipewire_ingress import PipeWireIngress
 from .settings import STREAM_DESTINATION_KEYS, SettingsError, SettingsStore
 
 
@@ -69,11 +70,16 @@ class BroadcastService:
         }
         self._listeners: set[Listener] = set()
         self._activity_sequence = 0
+        self._managed_audio_source = ""
+        self._managed_audio_source_owner = ""
+        self._ingress_retry_task: asyncio.Task[None] | None = None
         self._command_lock = asyncio.Lock()
         self.audio = IcecastAudioEngine(self._engine_state)
         self.recording = RecordingEngine(self._engine_state)
         self.obs = ObsController()
+        self.pipewire_ingress = PipeWireIngress()
         self._live_metadata_task: asyncio.Task[None] | None = None
+        self._publish_audio_source_state()
         self.icecast = IcecastControl(
             lambda: deepcopy(self.settings),
             lambda: self.state["outputs"]["radio"]["status"] == "live",
@@ -82,6 +88,11 @@ class BroadcastService:
 
     def start_background_tasks(self) -> None:
         self.icecast.start()
+        if self.pipewire_ingress.supported:
+            self._ingress_retry_task = asyncio.create_task(
+                self._ensure_pipewire_ingress_with_retries(),
+                name="pipewire-ingress",
+            )
 
     def subscribe(self, listener: Listener) -> None:
         self._listeners.add(listener)
@@ -144,13 +155,36 @@ class BroadcastService:
             if normalized == "get-stream-destination":
                 return {"ok": True, "destination": self._stream_destination()}
             if normalized == "list-audio-sources":
+                await self._ensure_pipewire_ingress()
                 return {"ok": True, "audioSources": await asyncio.to_thread(list_audio_sources)}
             if normalized == "select-audio-source":
                 route = str(payload.get("route") or "").strip().upper()
-                sources = await asyncio.to_thread(list_audio_sources)
-                source = voicemeeter_source_for_route(route, sources)
-                result = self._save_settings({"audioSourceId": source, "audioSourceName": source}, True)
-                return {**result, "audioSource": source, "route": route}
+                ingress_sink, ingress_source = await self._ensure_pipewire_ingress()
+                if self.pipewire_ingress.supported and not ingress_source:
+                    raise EngineError("RebornBroadcaster PipeWire input is not ready; retrying")
+                if ingress_source:
+                    source = ingress_source
+                else:
+                    sources = await asyncio.to_thread(list_audio_sources)
+                    source = voicemeeter_source_for_route(route, sources)
+                self._managed_audio_source = source
+                self._managed_audio_source_owner = str(payload.get("source") or "API client")
+                self._publish_audio_source_state()
+                return {
+                    "ok": True,
+                    "audioSource": source,
+                    "route": route,
+                    "managed": True,
+                    "ingressSink": ingress_sink,
+                    "state": self.snapshot(),
+                }
+            if normalized == "release-audio-source":
+                owner = str(payload.get("source") or "API client")
+                if not self._managed_audio_source_owner or self._managed_audio_source_owner == owner:
+                    self._managed_audio_source = ""
+                    self._managed_audio_source_owner = ""
+                    self._publish_audio_source_state()
+                return {"ok": True, "managed": False, "state": self.snapshot()}
             if normalized == "save-settings":
                 return self._save_settings(payload.get("settings", payload), payload.get("merge", True))
             if normalized == "set-stream-destination":
@@ -259,6 +293,7 @@ class BroadcastService:
             }
         )
         self.state["nowPlaying"] = str(self.settings.get("nowPlaying") or "")
+        self._publish_audio_source_state()
         self.state["streamDestinationUpdatedAt"] = str(
             self.settings.get("streamDestinationUpdatedAt") or ""
         )
@@ -325,7 +360,7 @@ class BroadcastService:
         if not self.settings["icecastEnabled"]:
             raise EngineError("Icecast output is disabled")
         try:
-            await self.audio.start(self.settings)
+            await self.audio.start(self._effective_audio_settings())
             title = str(self.state.get("nowPlaying") or self.settings.get("nowPlaying") or "").strip()
             await self._cancel_live_metadata()
             self._live_metadata_task = asyncio.create_task(
@@ -447,7 +482,7 @@ class BroadcastService:
                     "coreVersion": __version__,
                 },
             )
-            path = await self.recording.start(self.settings)
+            path = await self.recording.start(self._effective_audio_settings())
             recording = deepcopy(self.state["recording"])
             return {
                 "ok": True,
@@ -532,6 +567,9 @@ class BroadcastService:
         }
 
     async def shutdown(self) -> None:
+        if self._ingress_retry_task:
+            self._ingress_retry_task.cancel()
+            self._ingress_retry_task = None
         await self._cancel_live_metadata()
         await asyncio.gather(
             self.icecast.stop(),
@@ -551,7 +589,49 @@ class BroadcastService:
             await self.obs.close()
         except Exception:
             pass
+        await asyncio.to_thread(self.pipewire_ingress.close)
         self.state["core"]["status"] = "stopped"
+
+    async def _ensure_pipewire_ingress(self) -> tuple[str, str]:
+        if not self.pipewire_ingress.supported:
+            return "", ""
+        try:
+            sink, source = await asyncio.to_thread(self.pipewire_ingress.ensure)
+            self.state["pipeWireIngress"] = {
+                "status": "ready", "sink": sink, "source": source, "error": "",
+            }
+            return sink, source
+        except Exception as error:
+            self.state["pipeWireIngress"] = {
+                "status": "retrying", "sink": "", "source": "", "error": str(error),
+            }
+            return "", ""
+
+    async def _ensure_pipewire_ingress_with_retries(self) -> None:
+        delay = 1.0
+        while True:
+            sink, _source = await self._ensure_pipewire_ingress()
+            if sink:
+                return
+            await asyncio.sleep(delay)
+            delay = min(delay * 1.5, 10.0)
+
+    def _effective_audio_settings(self) -> dict[str, Any]:
+        settings = deepcopy(self.settings)
+        if self._managed_audio_source:
+            settings["audioSourceId"] = self._managed_audio_source
+            settings["audioSourceName"] = self._managed_audio_source
+        return settings
+
+    def _publish_audio_source_state(self) -> None:
+        standalone = str(
+            self.settings.get("audioSourceId") or self.settings.get("audioSourceName") or ""
+        )
+        self.state["audioSource"] = standalone
+        self.state["managedAudioSource"] = self._managed_audio_source
+        self.state["effectiveAudioSource"] = self._managed_audio_source or standalone
+        self.state["audioSourceManagedBy"] = self._managed_audio_source_owner
+        self.state["updatedAt"] = self._timestamp()
 
     @staticmethod
     def _timestamp() -> str:
