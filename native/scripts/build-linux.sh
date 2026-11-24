@@ -43,7 +43,21 @@ cp -R "$project_root/docs" "$package/docs"
 [[ -f "$update_agent_root/scripts/New-AppIntegrationBundle.ps1" ]] || { echo "RebornUpdateAgent source was not found at $update_agent_root" >&2; exit 5; }
 app_config="$project_root/updater/rebornbroadcaster.linux.app.json"
 bootstrap_config="$project_root/updater/agent-bootstrap.json"
-launcher_config="$project_root/updater/reborn-launch.json"
+launcher_config="$package/../reborn-launch-$runtime.json"
+python3 - "$app_config" "$launcher_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+app_config, launcher_config = map(Path, sys.argv[1:])
+app = json.loads(app_config.read_text(encoding="utf-8"))
+launcher_config.write_text(json.dumps({
+    "schema": 1,
+    "appId": app["appId"],
+    "displayName": app["displayName"],
+    "fallbackExecutable": app["executable"],
+}) + "\n", encoding="utf-8")
+PY
 if command -v pwsh >/dev/null; then
   pwsh -NoLogo -NoProfile -File "$update_agent_root/scripts/New-AppIntegrationBundle.ps1" \
     -Runtime "$runtime" \
