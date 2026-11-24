@@ -41,14 +41,62 @@ mkdir -p "$package/assets"
 cp "$project_root/assets/KRBroadcasterIcon.png" "$package/assets/KRBroadcasterIcon.png"
 cp -R "$project_root/docs" "$package/docs"
 [[ -f "$update_agent_root/scripts/New-AppIntegrationBundle.ps1" ]] || { echo "RebornUpdateAgent source was not found at $update_agent_root" >&2; exit 5; }
-command -v pwsh >/dev/null || { echo "PowerShell is required to package the Reborn updater bridge" >&2; exit 5; }
-pwsh -NoLogo -NoProfile -File "$update_agent_root/scripts/New-AppIntegrationBundle.ps1" \
-  -Runtime "$runtime" \
-  -AppConfig "$project_root/updater/rebornbroadcaster.linux.app.json" \
-  -BootstrapConfig "$project_root/updater/agent-bootstrap.json" \
-  -LauncherConfig "$project_root/updater/reborn-launch.json" \
-  -AppVersion "$version" \
-  -OutputDirectory "$package/updater"
+app_config="$project_root/updater/rebornbroadcaster.linux.app.json"
+bootstrap_config="$project_root/updater/agent-bootstrap.json"
+launcher_config="$project_root/updater/reborn-launch.json"
+if command -v pwsh >/dev/null; then
+  pwsh -NoLogo -NoProfile -File "$update_agent_root/scripts/New-AppIntegrationBundle.ps1" \
+    -Runtime "$runtime" \
+    -AppConfig "$app_config" \
+    -BootstrapConfig "$bootstrap_config" \
+    -LauncherConfig "$launcher_config" \
+    -AppVersion "$version" \
+    -OutputDirectory "$package/updater"
+else
+  integration_core="$update_agent_root/artifacts/$runtime/integration-core"
+  python3 - "$integration_core" "$package/updater" "$app_config" "$bootstrap_config" "$launcher_config" "$version" "$runtime" <<'PY'
+import hashlib
+import json
+import shutil
+import sys
+from pathlib import Path
+
+core, destination, app_config, bootstrap_config, launcher_config, version, runtime = map(Path, sys.argv[1:])
+destination.mkdir(parents=True, exist_ok=False)
+metadata_path = core / "reborn-integration-core.json"
+metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+if metadata.get("schema") != 1 or metadata.get("runtime") != str(runtime) or not metadata.get("integrationVersion"):
+    raise SystemExit("The Linux integration-core metadata is invalid")
+app = json.loads(app_config.read_text(encoding="utf-8"))
+for field in ("appId", "displayName", "currentVersion", "executable"):
+    if not str(app.get(field, "")).strip():
+        raise SystemExit(f"App configuration is missing {field}")
+app["currentVersion"] = str(version)
+for name in ("RebornUpdateBootstrap", "RebornAppLauncher"):
+    source = core / name
+    if not source.is_file():
+        raise SystemExit(f"Integration core is missing {name}")
+    expected = str(metadata.get("files", {}).get(name, "")).lower()
+    actual = hashlib.sha256(source.read_bytes()).hexdigest()
+    if actual != expected:
+        raise SystemExit(f"Integration core hash mismatch: {name}")
+    shutil.copy2(source, destination / name)
+    (destination / name).chmod((destination / name).stat().st_mode | 0o111)
+(destination / "app-config.json").write_text(json.dumps(app, indent=2) + "\n", encoding="utf-8")
+shutil.copy2(bootstrap_config, destination / "agent-bootstrap.json")
+shutil.copy2(launcher_config, destination / "reborn-launch.json")
+integration = {
+    "schema": 1,
+    "integrationVersion": metadata["integrationVersion"],
+    "appVersion": str(version),
+    "runtime": str(runtime),
+    "appId": app["appId"],
+    "sharedCore": True,
+    "files": ["RebornUpdateBootstrap", "RebornAppLauncher", "app-config.json", "agent-bootstrap.json", "reborn-launch.json"],
+}
+(destination / "reborn-integration.json").write_text(json.dumps(integration, indent=2) + "\n", encoding="utf-8")
+PY
+fi
 chmod +x "$package/RebornBroadcaster"
 command -v ffmpeg >/dev/null || { echo "FFmpeg is required" >&2; exit 5; }
 echo "Linux package staged at $package"
