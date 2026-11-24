@@ -39,6 +39,7 @@ cp "$qt_lib_root"/libQt6QuickControls2*.so.6 \
   "$package/PySide6/Qt/lib/"
 mkdir -p "$package/assets"
 cp "$project_root/assets/KRBroadcasterIcon.png" "$package/assets/KRBroadcasterIcon.png"
+cp -R "$project_root/docs" "$package/docs"
 [[ -f "$update_agent_root/scripts/New-AppIntegrationBundle.ps1" ]] || { echo "RebornUpdateAgent source was not found at $update_agent_root" >&2; exit 5; }
 command -v pwsh >/dev/null || { echo "PowerShell is required to package the Reborn updater bridge" >&2; exit 5; }
 pwsh -NoLogo -NoProfile -File "$update_agent_root/scripts/New-AppIntegrationBundle.ps1" \

@@ -24,6 +24,19 @@ from .paths import bundled_ffmpeg, controller_exit_request_path, is_packaged, pa
 from .updater_health import launched_version, read_update_status, request_update_apply, request_update_check
 
 
+def _read_documentation() -> str:
+    candidates = (
+        packaged_executable().parent / "docs" / "USER_GUIDE.md",
+        Path(__file__).resolve().parents[2] / "docs" / "USER_GUIDE.md",
+    )
+    for path in candidates:
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return "# Documentation unavailable\n\nThe bundled user guide could not be loaded."
+
+
 class CoreBridge(QObject):
     connectedChanged = Signal()
     compatibleChanged = Signal()
@@ -123,6 +136,10 @@ class CoreBridge(QObject):
     @Property(str, notify=messageChanged)
     def message(self) -> str:
         return self._message
+
+    @Property(str, constant=True)
+    def documentationMarkdown(self) -> str:
+        return _read_documentation()
 
     @Property(str, notify=updateStatusChanged)
     def updateStatusJson(self) -> str:

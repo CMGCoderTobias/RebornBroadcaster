@@ -257,6 +257,65 @@ ApplicationWindow {
         onAccepted: { if (window.backend) window.backend.exportConfig(selectedFile.toString(), includeSecrets.checked) }
     }
 
+    Popup {
+        id: documentationPopup
+        parent: Overlay.overlay
+        x: Math.max(16, (parent.width - width) / 2)
+        y: Math.max(16, (parent.height - height) / 2)
+        width: Math.min(parent.width - 32, 900)
+        height: Math.min(parent.height - 32, 660)
+        modal: true
+        focus: true
+        padding: 0
+        closePolicy: Popup.CloseOnEscape
+        background: Rectangle {
+            color: "white"
+            radius: 12
+            border.width: 1
+            border.color: window.blue
+        }
+        contentItem: ColumnLayout {
+            spacing: 0
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 60
+                color: "#183f63"
+                radius: 12
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 18
+                    anchors.rightMargin: 12
+                    Text { text: "RebornBroadcaster Documentation"; color: "white"; font.pixelSize: 20; font.bold: true }
+                    Item { Layout.fillWidth: true }
+                    BlueButton { text: "Close"; onClicked: documentationPopup.close() }
+                }
+            }
+            ScrollView {
+                id: documentationScroll
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                TextArea {
+                    width: documentationScroll.availableWidth
+                    text: window.backend ? window.backend.documentationMarkdown : "Documentation is unavailable."
+                    textFormat: TextEdit.MarkdownText
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextEdit.WordWrap
+                    color: "#202830"
+                    font.pixelSize: 14
+                    leftPadding: 24
+                    rightPadding: 24
+                    topPadding: 18
+                    bottomPadding: 24
+                    background: null
+                }
+            }
+        }
+    }
+
     component BlueButton: Button {
         id: control
         property bool danger: false
@@ -487,6 +546,7 @@ ApplicationWindow {
                     }
                     BlueButton { width: 120; text: "Settings"; onClicked: { window.page = 1; if (window.backend) window.backend.loadSettings() } }
                     BlueButton { width: 100; text: "About"; onClicked: window.page = 2 }
+                    BlueButton { width: 150; text: "Documentation"; onClicked: documentationPopup.open() }
                 }
 
                 Rectangle {

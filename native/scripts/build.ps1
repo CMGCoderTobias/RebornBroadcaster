@@ -98,6 +98,7 @@ Copy-Item -LiteralPath (Join-Path $ffmpegPackage 'ffmpeg.exe.LICENSE') -Destinat
 Copy-Item -LiteralPath (Join-Path $ffmpegPackage 'ffmpeg.exe.README') -Destination (Join-Path $packageRoot 'FFMPEG-README.txt') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.txt') -Destination (Join-Path $packageRoot 'THIRD_PARTY_NOTICES.txt') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'assets') -Destination (Join-Path $packageRoot 'assets') -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs') -Destination (Join-Path $packageRoot 'docs') -Recurse -Force
 New-Item -ItemType Directory -Path (Join-Path $packageRoot 'tools') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts\Stop-RebornBroadcasterCore.ps1') -Destination (Join-Path $packageRoot 'tools\Stop-RebornBroadcasterCore.ps1') -Force
 if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'RebornBroadcaster.exe') -PathType Leaf)) {
