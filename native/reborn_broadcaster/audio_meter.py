@@ -81,6 +81,7 @@ class AudioLevelMonitor:
         with self._lock:
             if generation != self._generation:
                 process.terminate()
+                process.wait(timeout=2)
                 return
             self._process = process
         last_update = 0.0
@@ -97,6 +98,11 @@ class AudioLevelMonitor:
                 if now - last_update >= 0.08:
                     last_update = now
                     self._notify(level)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
         with self._lock:
             if self._process is process:
                 self._process = None
