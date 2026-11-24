@@ -32,6 +32,7 @@ ApplicationWindow {
     property bool coreBusy: Boolean(backend && backend.busy)
     property string coreMessage: backend ? backend.message : "Controller is closing…"
     property string coreVersion: state.core && state.core.version ? String(state.core.version) : ""
+    property real audioLevelDb: backend ? backend.audioLevelDb : -96
     property int outerMargin: width < 720 || height < 560 ? 16 : 38
     property int liveSeconds: 0
     property bool radioLive: radioStatus === "live"
@@ -168,6 +169,10 @@ ApplicationWindow {
         let minutes = Math.floor((liveSeconds % 3600) / 60)
         let seconds = liveSeconds % 60
         return "Live " + String(hours).padStart(2, "0") + ":" + String(minutes).padStart(2, "0") + ":" + String(seconds).padStart(2, "0")
+    }
+
+    function audioMeterFraction() {
+        return Math.max(0, Math.min(1, (audioLevelDb + 60) / 60))
     }
 
     function addLog(message) {
@@ -537,6 +542,33 @@ ApplicationWindow {
                     }
                 }
 
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 34
+                    radius: 6
+                    color: "#edf2f6"
+                    border.color: "#c7d3df"
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 10
+                        Text { text: "Selected audio source"; color: "#334e68"; font.pixelSize: 12; font.bold: true }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 10
+                            radius: 5
+                            color: "#d5dde5"
+                            Rectangle {
+                                width: parent.width * window.audioMeterFraction()
+                                height: parent.height
+                                radius: 5
+                                color: window.audioLevelDb > -6 ? "#d32f2f" : window.audioLevelDb > -18 ? "#d7a72f" : "#218838"
+                            }
+                        }
+                        Text { text: window.audioLevelDb <= -95 ? "No signal" : window.audioLevelDb.toFixed(1) + " dB"; color: "#555555"; Layout.preferredWidth: 64 }
+                    }
+                }
+
                 Flow {
                     Layout.fillWidth: true; spacing: 10
                     BlueButton {
@@ -732,6 +764,10 @@ ApplicationWindow {
                                                 property string savedSource: ""
                                                 Layout.fillWidth: true
                                                 model: [window.noAudioSourcesText()]
+                                    onActivated: {
+                                        if (window.backend && currentText !== window.noAudioSourcesText())
+                                            window.backend.previewAudioSource(currentText)
+                                    }
                                             }
                                             BlueButton { text: "Refresh"; onClicked: { if (window.backend) window.backend.refreshAudioSources() } }
                                         }

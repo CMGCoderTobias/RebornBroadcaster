@@ -56,6 +56,10 @@ def _input_arguments(settings: dict[str, Any]) -> list[str]:
         raise EngineError(str(error)) from error
 
 
+def input_arguments(settings: dict[str, Any]) -> list[str]:
+    return _input_arguments(settings)
+
+
 def _codec_arguments(settings: dict[str, Any], bitrate: int) -> tuple[list[str], str, str]:
     encoding = str(settings.get("encodingType") or "mp3").lower()
     if encoding in {"aac", "m4a"}:

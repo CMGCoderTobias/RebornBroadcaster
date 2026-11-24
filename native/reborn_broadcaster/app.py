@@ -121,7 +121,7 @@ def main() -> int:
         _close_superseded_controllers()
 
     bridge = CoreBridge(auto_start=not automated)
-    app.aboutToQuit.connect(bridge.cancelConversion)
+    app.aboutToQuit.connect(bridge.shutdown)
     health_reported = False
 
     def report_health_when_ready() -> None:
@@ -144,14 +144,31 @@ def main() -> int:
     def exit_controller() -> None:
         bridge.requestExit()
 
+    close_after_core_stop = False
+
     def close_window(event) -> None:
+        nonlocal close_after_core_stop
+        if not bridge.connected and not bridge.startingCore:
+            event.setAccepted(True)
+            app.quit()
+            return
         event.setAccepted(False)
+        if bridge.stoppingCore:
+            close_after_core_stop = True
+            window.hide()
+            return
         if tray and tray.isVisible():
             window.hide()
             return
         exit_controller()
 
+    def finish_pending_close() -> None:
+        if close_after_core_stop and not bridge.connected and not bridge.stoppingCore:
+            app.quit()
+
     bridge.exitReady.connect(app.quit)
+    bridge.connectedChanged.connect(finish_pending_close)
+    bridge.stoppingCoreChanged.connect(finish_pending_close)
     window.closing.connect(close_window)
     if not capture_mode and QSystemTrayIcon.isSystemTrayAvailable():
         app.setQuitOnLastWindowClosed(False)

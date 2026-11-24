@@ -20,6 +20,7 @@ from PySide6.QtGui import QDesktopServices
 from . import __version__
 from .audio_backends import current_audio_backend
 from .audio_engine import audio_conversion_plan
+from .audio_meter import AudioLevelMonitor
 from .paths import bundled_ffmpeg, controller_exit_request_path, is_packaged, packaged_executable
 from .updater_health import launched_version, read_update_status, request_update_apply, request_update_check
 
@@ -45,6 +46,7 @@ class CoreBridge(QObject):
     stateJsonChanged = Signal()
     settingsJsonChanged = Signal()
     audioSourcesJsonChanged = Signal()
+    audioLevelChanged = Signal()
     messageChanged = Signal()
     updateStatusChanged = Signal()
     conversionChanged = Signal()
@@ -53,6 +55,8 @@ class CoreBridge(QObject):
     _updateResultReady = Signal(object)
     _conversionResultReady = Signal(object)
     _coreStartupFinished = Signal(int)
+    _audioLevelReady = Signal(float)
+    stoppingCoreChanged = Signal()
 
     def __init__(self, host: str = "127.0.0.1", port: int = 8010, auto_start: bool = True) -> None:
         super().__init__()
@@ -69,6 +73,8 @@ class CoreBridge(QObject):
         self._state_json = "{}"
         self._settings_json = "{}"
         self._audio_sources_json = "[]"
+        self._audio_level_db = -96.0
+        self._stopping_core = False
         self._message = "Connecting to broadcast core…"
         self._update_status = {
             "state": "idle",
@@ -89,6 +95,8 @@ class CoreBridge(QObject):
         self._updateResultReady.connect(self._accept_update_result)
         self._conversionResultReady.connect(self._accept_conversion_result)
         self._coreStartupFinished.connect(self._finish_core_start)
+        self._audioLevelReady.connect(self._set_audio_level)
+        self._audio_meter = AudioLevelMonitor(self._audioLevelReady.emit)
         if auto_start:
             QTimer.singleShot(0, self.ensureCore)
             QTimer.singleShot(800, self.refreshUpdateStatus)
@@ -124,6 +132,14 @@ class CoreBridge(QObject):
     @Property(str, notify=audioSourcesJsonChanged)
     def audioSourcesJson(self) -> str:
         return self._audio_sources_json
+
+    @Property(float, notify=audioLevelChanged)
+    def audioLevelDb(self) -> float:
+        return self._audio_level_db
+
+    @Property(bool, notify=stoppingCoreChanged)
+    def stoppingCore(self) -> bool:
+        return self._stopping_core
 
     @Property(str, constant=True)
     def audioBackendId(self) -> str:
@@ -333,7 +349,23 @@ class CoreBridge(QObject):
         if self._busy:
             return
         self._set_busy(True)
+        self._set_stopping_core(True)
         threading.Thread(target=self._stop_core_worker, args=(False,), daemon=True, name="core-stop").start()
+
+    @Slot(str)
+    def previewAudioSource(self, source: str) -> None:
+        try:
+            settings = json.loads(self._settings_json)
+        except json.JSONDecodeError:
+            settings = {}
+        source = source.strip()
+        settings.update({"audioSourceId": source, "audioSourceName": source})
+        self._audio_meter.start(settings)
+
+    @Slot()
+    def shutdown(self) -> None:
+        self._audio_meter.stop()
+        self.cancelConversion()
 
     @Slot(str)
     def saveSettings(self, settings_json: str) -> None:
@@ -536,6 +568,7 @@ class CoreBridge(QObject):
             self._set_compatible(False)
             self._set_message("Broadcast core stopped")
             self._set_busy(False)
+            self._set_stopping_core(False)
             if exit_after:
                 self.exitReady.emit()
             return
@@ -581,12 +614,15 @@ class CoreBridge(QObject):
         if isinstance(settings, dict):
             self._settings_json = json.dumps(settings)
             self.settingsJsonChanged.emit()
+            self._audio_meter.start(settings)
         audio_sources = response.get("audioSources")
         if isinstance(audio_sources, list):
             self._audio_sources_json = json.dumps([str(source) for source in audio_sources])
             self.audioSourcesJsonChanged.emit()
         if response.get("type") == "error":
             self._set_message(str(response.get("error") or "Core request failed"))
+            if self._stopping_core:
+                self._set_stopping_core(False)
         elif not quiet:
             errors = response.get("errors")
             if errors:
@@ -928,6 +964,18 @@ class CoreBridge(QObject):
         if self._busy != value:
             self._busy = value
             self.busyChanged.emit()
+
+    def _set_stopping_core(self, value: bool) -> None:
+        if self._stopping_core != value:
+            self._stopping_core = value
+            self.stoppingCoreChanged.emit()
+
+    @Slot(float)
+    def _set_audio_level(self, value: float) -> None:
+        value = max(-96.0, min(0.0, float(value)))
+        if abs(self._audio_level_db - value) >= 0.1:
+            self._audio_level_db = value
+            self.audioLevelChanged.emit()
 
     def _set_message(self, value: str) -> None:
         if self._message != value:
