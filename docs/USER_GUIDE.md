@@ -14,23 +14,25 @@ Audio recording and radio streaming are independent. They may run together or se
 
 ## Audio source and K-OS routing
 
-When RebornBroadcaster is used with K-OS, select the final K-OS stream mix rather than the microphone alone.
+Choose a standalone source for normal RebornBroadcaster use. When K-OS connects, it temporarily directs its final stream mix to RebornBroadcaster and the core reports the effective managed source. Stopping or disconnecting K-OS releases that override and restores the standalone source; it does not rewrite the saved selection.
+
+The **Selected audio source** meter follows the source the core is actually using and updates continuously. Use it to confirm signal before starting radio or recording output.
 
 ### Windows
 
-K-OS uses VoiceMeeter. Its recommended stream route is B2. In RebornBroadcaster, select the VoiceMeeter recording/output device that represents the B2 program bus. Device names vary between VoiceMeeter editions, so verify the source with RebornBroadcaster's source list and the K-OS Stream Out meter.
+K-OS uses VoiceMeeter. Its recommended stream route is B2. While K-OS controls RebornBroadcaster, it temporarily selects the VoiceMeeter recording/output device that represents the configured B2 program bus. Device names vary between VoiceMeeter editions, so verify the effective source with RebornBroadcaster's source meter and the K-OS Stream Out meter.
 
 The normal K-OS plan is microphone plus meeting return plus playback/media on B2. Do not select the meeting-send B1 device unless that is intentionally your complete program mix.
 
 ### Linux
 
-K-OS uses PipeWire and creates `KOS_Stream_Mix_B2`. Select the monitor/source corresponding to **KOS_Stream_Mix_B2** in RebornBroadcaster. K-OS must be connected to PipeWire before that temporary source appears.
+RebornBroadcaster creates a stable PipeWire ingress named `RebornBroadcaster Input` (`reborn.broadcaster_input`). K-OS routes `KOS_Stream_Mix_B2` into that ingress while it controls RebornBroadcaster. The core retries ingress creation during startup, and the Audio settings page refreshes available sources automatically, so K-OS does not need to be running when RebornBroadcaster first opens.
 
 For meetings, the meeting application normally uses:
 
 - Microphone: `KOS_Meeting_Send_B1`
 - Speaker/output: `KOS_Meeting_Return`
-- RebornBroadcaster source: the monitor/source for `KOS_Stream_Mix_B2`
+- RebornBroadcaster managed source: `RebornBroadcaster Input` / `reborn.broadcaster_input.monitor`
 
 Do not select the physical microphone in RebornBroadcaster when K-OS is expected to mix guests, macros, and optional application audio.
 
@@ -94,7 +96,8 @@ RebornUpdateAgent checks and stages updates independently of Electron or Qt. The
 
 ## Troubleshooting
 
-- No K-OS source on Linux: connect K-OS to PipeWire first, then refresh RebornBroadcaster's audio sources.
+- No K-OS signal on Linux: confirm both apps are connected, K-OS Stream Out has signal, and RebornBroadcaster reports `RebornBroadcaster Input` as its effective source. The ingress is retried automatically.
+- Existing Linux install still saves `kos.stream.monitor`: choose the desired standalone source once in Audio settings. Older releases could save K-OS's temporary source; current releases keep it as a runtime-only override.
 - No complete mix on Windows: select the VoiceMeeter B2/program output, not only the hardware microphone.
 - Radio immediately recovers: verify host, source port, TLS, proxy path, mountpoint, username, and source password.
 - Port 443 fails without TLS: enable TLS.
